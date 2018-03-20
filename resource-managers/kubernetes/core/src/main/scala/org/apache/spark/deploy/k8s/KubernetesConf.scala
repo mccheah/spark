@@ -19,8 +19,10 @@ package org.apache.spark.deploy.k8s
 import org.apache.spark.{SparkConf, SparkException}
 import org.apache.spark.deploy.k8s.Config._
 import org.apache.spark.deploy.k8s.Constants._
+import org.apache.spark.deploy.k8s.submit.JavaMainAppResource
 import org.apache.spark.deploy.k8s.submit.MainAppResource
 import org.apache.spark.internal.config.ConfigEntry
+import org.apache.spark.launcher.SparkLauncher
 
 private[k8s] sealed trait KubernetesRoleSpecificConf
 private[k8s] case class KubernetesDriverSpecificConf(
@@ -42,10 +44,22 @@ private[k8s] case class KubernetesDriverSpecificConf(
 private[k8s] case object KubernetesExecutorSpecificConf extends KubernetesRoleSpecificConf
 
 private[k8s] class KubernetesConf[T <: KubernetesRoleSpecificConf](
-    private val sparkConf: SparkConf,
-    val roleSpecificConf: T,
-    val appResourceNamePrefix: String,
-    val appId: String) {
+  private val sparkConf: SparkConf,
+  val roleSpecificConf: T,
+  val appResourceNamePrefix: String,
+  val appId: String,
+  val mainAppResource: Option[MainAppResource]) {
+
+  private val additionalMainAppJar = if (mainAppResource.nonEmpty) {
+    val mayBeResource = mainAppResource.get match {
+      case JavaMainAppResource(resource) if resource != SparkLauncher.NO_RESOURCE =>
+        Some(resource)
+      case _ => None
+    }
+    mayBeResource
+  } else {
+    None
+  }
 
   def kubernetesAppId(): String = sparkConf
     .getOption("spark.app.id")
@@ -59,10 +73,10 @@ private[k8s] class KubernetesConf[T <: KubernetesRoleSpecificConf](
     .map(str => str.split(",").toSeq)
     .getOrElse(Seq.empty[String])
 
-  def sparkFiles(): Seq[String] = sparkConf
-    .getOption("spark.files")
+  def sparkFiles(): Seq[String] =
+    sparkConf.getOption("spark.files")
     .map(str => str.split(",").toSeq)
-    .getOrElse(Seq.empty[String])
+    .getOrElse(Seq.empty[String]) ++ additionalMainAppJar.toSeq
 
   def driverLabels(): Map[String, String] = {
     val driverCustomLabels = KubernetesUtils.parsePrefixedKeyValuePairs(
@@ -136,6 +150,7 @@ private[k8s] object KubernetesConf {
       KubernetesDriverSpecificConf(
         sparkConf, mainAppResource, appName, mainClass, appArgs),
       appResourceNamePrefix,
-      appId)
+      appId,
+      mainAppResource)
   }
 }
