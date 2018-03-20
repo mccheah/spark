@@ -16,9 +16,28 @@
  */
 package org.apache.spark.deploy.k8s
 
+import io.fabric8.kubernetes.api.model.ContainerBuilder
 import io.fabric8.kubernetes.api.model.HasMetadata
+import io.fabric8.kubernetes.api.model.PodBuilder
+import org.apache.spark.SparkConf
+
+import org.apache.spark.deploy.k8s.submit.KubernetesDriverSpec
 
 private[k8s] case class KuberneteSpec(
   pod: SparkPod,
   additionalDriverKubernetesResources: Seq[HasMetadata],
   podJavaSystemProperties: Map[String, String])
+
+private[k8s] object KuberneteSpec {
+  def initialSpec(): KuberneteSpec = {
+    KuberneteSpec(
+      SparkPod(
+        // Set new metadata and a new spec so that submission steps can use
+        // PodBuilder#editMetadata() and/or PodBuilder#editSpec() safely.
+        new PodBuilder().withNewMetadata().endMetadata().withNewSpec().endSpec().build(),
+        new ContainerBuilder().build()
+      ),
+      Seq.empty[HasMetadata],
+      Map.empty[String,String]
+  }
+}
