@@ -16,19 +16,15 @@
  */
 package org.apache.spark.deploy.k8s.submit
 
-import org.apache.spark.{SparkConf, SparkException}
-import org.apache.spark.deploy.k8s.{KubernetesUtils, MountSecretsBootstrap}
-import org.apache.spark.deploy.k8s.Config._
-import org.apache.spark.deploy.k8s.Constants._
-import org.apache.spark.deploy.k8s.submit.steps._
+import org.apache.spark.SparkConf
+import org.apache.spark.deploy.k8s.{KubernetesConf, KuberneteSpec}
+import org.apache.spark.deploy.k8s.features._
 import org.apache.spark.launcher.SparkLauncher
-import org.apache.spark.util.SystemClock
-import org.apache.spark.util.Utils
 
 /**
- * Figures out and returns the complete ordered list of needed DriverConfigurationSteps to
+ * Figures out and returns the complete ordered list of needed KubernetesFeatureConfigSteps to
  * configure the Spark driver pod. The returned steps will be applied one by one in the given
- * order to produce a final KubernetesDriverSpec that is used in KubernetesClientApplication
+ * order to produce a final KuberneteSpec that is used in KubernetesClientApplication
  * to construct and create the driver pod.
  */
 private[spark] class DriverConfigOrchestrator(
@@ -40,49 +36,36 @@ private[spark] class DriverConfigOrchestrator(
     appArgs: Array[String],
     sparkConf: SparkConf) {
 
-  // The resource name prefix is derived from the Spark application name, making it easy to connect
-  // the names of the Kubernetes resources from e.g. kubectl or the Kubernetes dashboard to the
-  // application the user submitted.
+  def getConfigSteps: Seq[Function1[KuberneteSpec, KuberneteSpec]] = {
+    getFeatures.map(feature => {
+      spec: KuberneteSpec => {
+        val resolvedPod = feature.configurePod(spec.pod)
+        val resolvedAdditionalResources =
+          spec.additionalDriverKubernetesResources ++ feature.getAdditionalKubernetesResources()
+        val resolvedPodSystemProps =
+          spec.podJavaSystemProperties ++ feature.getAdditionalPodSystemProperties()
+        KuberneteSpec(resolvedPod, resolvedAdditionalResources, resolvedPodSystemProps)
+      }
+    })
+  }
 
-  private val imagePullPolicy = sparkConf.get(CONTAINER_IMAGE_PULL_POLICY)
-
-  def getAllConfigurationSteps: Seq[DriverConfigurationStep] = {
-    val driverCustomLabels = KubernetesUtils.parsePrefixedKeyValuePairs(
+  def getFeatures: Seq[KubernetesFeatureConfigStep] = {
+    val kubernetesConf = KubernetesConf.createDriverConf(
       sparkConf,
-      KUBERNETES_DRIVER_LABEL_PREFIX)
-    require(!driverCustomLabels.contains(SPARK_APP_ID_LABEL), "Label with key " +
-      s"$SPARK_APP_ID_LABEL is not allowed as it is reserved for Spark bookkeeping " +
-      "operations.")
-    require(!driverCustomLabels.contains(SPARK_ROLE_LABEL), "Label with key " +
-      s"$SPARK_ROLE_LABEL is not allowed as it is reserved for Spark bookkeeping " +
-      "operations.")
-
-    val secretNamesToMountPaths = KubernetesUtils.parsePrefixedKeyValuePairs(
-      sparkConf,
-      KUBERNETES_DRIVER_SECRETS_PREFIX)
-
-    val allDriverLabels = driverCustomLabels ++ Map(
-      SPARK_APP_ID_LABEL -> kubernetesAppId,
-      SPARK_ROLE_LABEL -> SPARK_POD_DRIVER_ROLE)
-
-    val initialSubmissionStep = new BasicDriverConfigurationStep(
-      kubernetesAppId,
-      kubernetesResourceNamePrefix,
-      allDriverLabels,
-      imagePullPolicy,
       appName,
-      mainClass,
-      appArgs,
-      sparkConf)
-
-    val serviceBootstrapStep = new DriverServiceBootstrapStep(
       kubernetesResourceNamePrefix,
-      allDriverLabels,
-      sparkConf,
-      new SystemClock)
+      kubernetesAppId,
+      mainAppResource,
+      mainClass,
+      appArgs)
 
-    val kubernetesCredentialsStep = new DriverKubernetesCredentialsStep(
-      sparkConf, kubernetesResourceNamePrefix)
+    val baseDriverStep = new BasicDriverFeatureStep(kubernetesConf)
+
+    val driverKubeCredStep =
+      new DriverKubernetesCredentialsFeatureStep(kubernetesConf)
+
+    val driverServiceStep =
+      new DriverServiceFeatureStep(kubernetesConf)
 
     val additionalMainAppJar = if (mainAppResource.nonEmpty) {
        val mayBeResource = mainAppResource.get match {
@@ -95,51 +78,9 @@ private[spark] class DriverConfigOrchestrator(
       None
     }
 
-    val sparkJars = sparkConf.getOption("spark.jars")
-      .map(_.split(","))
-      .getOrElse(Array.empty[String]) ++
-      additionalMainAppJar.toSeq
-    val sparkFiles = sparkConf.getOption("spark.files")
-      .map(_.split(","))
-      .getOrElse(Array.empty[String])
-
-    // TODO(SPARK-23153): remove once submission client local dependencies are supported.
-    if (existSubmissionLocalFiles(sparkJars) || existSubmissionLocalFiles(sparkFiles)) {
-      throw new SparkException("The Kubernetes mode does not yet support referencing application " +
-        "dependencies in the local file system.")
-    }
-
-    val dependencyResolutionStep = if (sparkJars.nonEmpty || sparkFiles.nonEmpty) {
-      Seq(new DependencyResolutionStep(
-        sparkJars,
-        sparkFiles))
-    } else {
-      Nil
-    }
-
-    val mountSecretsStep = if (secretNamesToMountPaths.nonEmpty) {
-      Seq(new DriverMountSecretsStep(new MountSecretsBootstrap(secretNamesToMountPaths)))
-    } else {
-      Nil
-    }
-
     Seq(
-      initialSubmissionStep,
-      serviceBootstrapStep,
-      kubernetesCredentialsStep) ++
-      dependencyResolutionStep ++
-      mountSecretsStep
-  }
-
-  private def existSubmissionLocalFiles(files: Seq[String]): Boolean = {
-    files.exists { uri =>
-      Utils.resolveURI(uri).getScheme == "file"
-    }
-  }
-
-  private def existNonContainerLocalFiles(files: Seq[String]): Boolean = {
-    files.exists { uri =>
-      Utils.resolveURI(uri).getScheme != "local"
-    }
+      baseDriverStep,
+      driverKubeCredStep,
+      driverServiceStep)
   }
 }
