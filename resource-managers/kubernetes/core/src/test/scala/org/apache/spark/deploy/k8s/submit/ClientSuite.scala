@@ -27,7 +27,6 @@ import org.scalatest.mockito.MockitoSugar._
 import org.apache.spark.{SparkConf, SparkFunSuite}
 import org.apache.spark.deploy.k8s.{KubernetesConf, KubernetesDriverSpecificConf, KubernetesSpec, SparkPod}
 import org.apache.spark.deploy.k8s.Constants._
-import org.apache.spark.deploy.k8s.features.KubernetesDriverBuilder
 
 class ClientSuite extends SparkFunSuite with BeforeAndAfter {
 

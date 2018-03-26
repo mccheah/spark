@@ -30,7 +30,6 @@ import org.apache.spark.deploy.SparkApplication
 import org.apache.spark.deploy.k8s.{KubernetesConf, KubernetesDriverSpecificConf, SparkKubernetesClientFactory}
 import org.apache.spark.deploy.k8s.Config._
 import org.apache.spark.deploy.k8s.Constants._
-import org.apache.spark.deploy.k8s.features.KubernetesDriverBuilder
 import org.apache.spark.internal.Logging
 import org.apache.spark.util.Utils
 
