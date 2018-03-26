@@ -21,7 +21,7 @@ import java.io.File
 import io.fabric8.kubernetes.client.Config
 
 import org.apache.spark.{SparkContext, SparkException}
-import org.apache.spark.deploy.k8s.{KubernetesUtils, MountSecretsBootstrap, SparkKubernetesClientFactory}
+import org.apache.spark.deploy.k8s.{KubernetesUtils, SparkKubernetesClientFactory}
 import org.apache.spark.deploy.k8s.Config._
 import org.apache.spark.deploy.k8s.Constants._
 import org.apache.spark.deploy.k8s.features.KubernetesExecutorBuilder
@@ -49,12 +49,6 @@ private[spark] class KubernetesClusterManager extends ExternalClusterManager wit
       scheduler: TaskScheduler): SchedulerBackend = {
     val executorSecretNamesToMountPaths = KubernetesUtils.parsePrefixedKeyValuePairs(
       sc.conf, KUBERNETES_EXECUTOR_SECRETS_PREFIX)
-    val mountSecretBootstrap = if (executorSecretNamesToMountPaths.nonEmpty) {
-      Some(new MountSecretsBootstrap(executorSecretNamesToMountPaths))
-    } else {
-      None
-    }
-
     val kubernetesClient = SparkKubernetesClientFactory.createKubernetesClient(
       KUBERNETES_MASTER_INTERNAL_URL,
       Some(sc.conf.get(KUBERNETES_NAMESPACE)),

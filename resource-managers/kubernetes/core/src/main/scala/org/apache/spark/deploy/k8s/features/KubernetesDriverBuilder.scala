@@ -16,18 +16,28 @@
  */
 package org.apache.spark.deploy.k8s.features
 
-import org.apache.spark.deploy.k8s.{KubernetesConf, KubernetesDriverSpecificConf, KubernetesSpec}
+import org.apache.spark.deploy.k8s.{KubernetesConf, KubernetesDriverSpecificConf, KubernetesRoleSpecificConf, KubernetesSpec}
 
-private[spark] class KubernetesDriverBuilder {
+private[spark] class KubernetesDriverBuilder(
+  provideBasicStep: (KubernetesConf[KubernetesDriverSpecificConf]) => BasicDriverFeatureStep =
+    new BasicDriverFeatureStep((_)),
+  provideCredentialsStep: (KubernetesConf[KubernetesDriverSpecificConf])
+    => DriverKubernetesCredentialsFeatureStep =
+    new DriverKubernetesCredentialsFeatureStep(_),
+  provideServiceStep: (KubernetesConf[KubernetesDriverSpecificConf]) => DriverServiceFeatureStep =
+    new DriverServiceFeatureStep(_),
+  provideSecretsStep: (KubernetesConf[_ <: KubernetesRoleSpecificConf]
+    => MountSecretsFeatureStep) =
+    new MountSecretsFeatureStep(_)) {
 
   def buildFromFeatures(
     kubernetesConf: KubernetesConf[KubernetesDriverSpecificConf]): KubernetesSpec = {
     val baseFeatures = Seq(
-      new BasicDriverFeatureStep(kubernetesConf),
-      new DriverKubernetesCredentialsFeatureStep(kubernetesConf),
-      new DriverServiceFeatureStep(kubernetesConf))
+      provideBasicStep(kubernetesConf),
+      provideCredentialsStep(kubernetesConf),
+      provideServiceStep(kubernetesConf))
     val allFeatures = if (kubernetesConf.roleSecretNamesToMountPaths.nonEmpty) {
-      baseFeatures ++ Seq(new MountSecretsFeatureStep(kubernetesConf))
+      baseFeatures ++ Seq(provideSecretsStep(kubernetesConf))
     } else baseFeatures
     var spec = KubernetesSpec.initialSpec(kubernetesConf.sparkConf.getAll.toMap)
     for (feature <- allFeatures) {

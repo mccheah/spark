@@ -65,8 +65,6 @@ private[spark] class KubernetesConf[T <: KubernetesRoleSpecificConf](
   def nodeSelector(): Map[String, String] =
     KubernetesUtils.parsePrefixedKeyValuePairs(sparkConf, KUBERNETES_NODE_SELECTOR_PREFIX)
 
-  def getSparkConf(): SparkConf = sparkConf
-
   def get[T](config: ConfigEntry[T]): T = sparkConf.get(config)
 
   def get(conf: String, defaultValue: String): String = sparkConf.get(conf, defaultValue)
@@ -113,7 +111,7 @@ private[spark] object KubernetesConf {
       KubernetesUtils.parsePrefixedKeyValuePairs(sparkConf, KUBERNETES_DRIVER_SECRETS_PREFIX)
     new KubernetesConf(
       sparkConfWithMainAppJar,
-      KubernetesDriverSpecificConf(mainAppResource, appName, mainClass, appArgs),
+      KubernetesDriverSpecificConf(mainAppResource, mainClass, appName, appArgs),
       appResourceNamePrefix,
       appId,
       driverLabels,
