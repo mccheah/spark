@@ -120,20 +120,23 @@ class BlockStoreShuffleReaderSuite extends SparkFunSuite with LocalSparkContext 
       new BaseShuffleHandle(shuffleId, numMaps, dependency)
     }
 
+    val sparkConf = new SparkConf()
+      .set("spark.shuffle.compress", "false")
+      .set("spark.shuffle.spill.compress", "false")
     val serializerManager = new SerializerManager(
       serializer,
-      new SparkConf()
-        .set("spark.shuffle.compress", "false")
-        .set("spark.shuffle.spill.compress", "false"))
+      sparkConf)
 
     val taskContext = TaskContext.empty()
     val metrics = taskContext.taskMetrics.createTempShuffleReadMetrics()
     val shuffleReader = new BlockStoreShuffleReader(
       shuffleHandle,
+      sparkConf.getAppId,
       reduceId,
       reduceId + 1,
       taskContext,
       metrics,
+      None,
       serializerManager,
       blockManager,
       mapOutputTracker)
