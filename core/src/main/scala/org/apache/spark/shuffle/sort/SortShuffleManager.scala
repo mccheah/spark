@@ -162,7 +162,8 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
           bypassMergeSortHandle,
           mapId,
           env.conf,
-          metrics)
+          metrics,
+          shuffleIoPlugin.map(_.writeSupport()).orNull)
       case other: BaseShuffleHandle[K @unchecked, V @unchecked, _] =>
         new SortShuffleWriter(
           shuffleBlockResolver, other, mapId, context, shuffleIoPlugin.map(_.writeSupport()))
