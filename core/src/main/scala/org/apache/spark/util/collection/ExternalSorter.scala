@@ -25,10 +25,12 @@ import scala.collection.mutable.ArrayBuffer
 
 import com.google.common.io.ByteStreams
 
-import org.apache.spark._
+import org.apache.spark.{util, _}
+import org.apache.spark.api.shuffle.{ShuffleBlockOutputStream, ShuffleMapOutputWriter}
 import org.apache.spark.executor.ShuffleWriteMetrics
 import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.serializer._
+import org.apache.spark.shuffle.ShuffleMapOutputObjectWriter
 import org.apache.spark.storage.{BlockId, DiskBlockObjectWriter}
 
 /**
@@ -680,46 +682,81 @@ private[spark] class ExternalSorter[K, V, C](
    * @param blockId block ID to write to. The index file will be blockId.name + ".index".
    * @return array of lengths, in bytes, of each partition of the file (used by map output tracker)
    */
-  def writePartitionedFile(
+  def writeToOutputWriterAndCommit(
       blockId: BlockId,
-      outputFile: File): Array[Long] = {
-
+      outputWriter: ShuffleMapOutputWriter): Array[Long] = {
     // Track location of each range in the output file
     val lengths = new Array[Long](numPartitions)
-    val writer = blockManager.getDiskWriter(blockId, outputFile, serInstance, fileBufferSize,
-      context.taskMetrics().shuffleWriteMetrics)
-
     if (spills.isEmpty) {
       // Case where we only have in-memory data
       val collection = if (aggregator.isDefined) map else buffer
       val it = collection.destructiveSortedWritablePartitionedIterator(comparator)
       while (it.hasNext) {
         val partitionId = it.nextPartition()
-        while (it.hasNext && it.nextPartition() == partitionId) {
-          it.writeNext(writer)
+        var partitionStream: ShuffleBlockOutputStream = null
+          try {
+            partitionStream = outputWriter.getNextPartitionOutputStream
+            util.Utils.tryWithResource(newShuffleMapObjectOutputWriter(blockId, partitionStream)) {
+                objectWriter =>
+              while (it.hasNext && it.nextPartition() == partitionId) {
+                it.writeNext(objectWriter)
+              }
+            }
+        } finally {
+          if (partitionStream != null) {
+            util.Utils.tryLogNonFatalError {
+              partitionStream.close()
+            }
+          }
         }
-        val segment = writer.commitAndGet()
-        lengths(partitionId) = segment.length
+        if (partitionStream != null) {
+          lengths(partitionId) = partitionStream.getCount
+        }
       }
     } else {
       // We must perform merge-sort; get an iterator by partition and write everything directly.
       for ((id, elements) <- this.partitionedIterator) {
         if (elements.hasNext) {
-          for (elem <- elements) {
-            writer.write(elem._1, elem._2)
+          var partitionStream: ShuffleBlockOutputStream = null
+          try {
+            partitionStream = outputWriter.getNextPartitionOutputStream
+            util.Utils.tryWithResource(newShuffleMapObjectOutputWriter(blockId, partitionStream)) {
+                objectWriter =>
+              for (elem <- elements) {
+                objectWriter.write(elem._1, elem._2)
+              }
+            }
+          } finally {
+            if (partitionStream != null) {
+              util.Utils.tryLogNonFatalError {
+                partitionStream.close()
+              }
+            }
           }
-          val segment = writer.commitAndGet()
-          lengths(id) = segment.length
+          if (partitionStream != null) {
+            lengths(id) = partitionStream.getCount
+          }
         }
       }
     }
 
-    writer.close()
+    outputWriter.commit()
     context.taskMetrics().incMemoryBytesSpilled(memoryBytesSpilled)
     context.taskMetrics().incDiskBytesSpilled(diskBytesSpilled)
     context.taskMetrics().incPeakExecutionMemory(peakMemoryUsedBytes)
 
     lengths
+  }
+
+  private def newShuffleMapObjectOutputWriter(
+      blockId: BlockId,
+      partitionStream: ShuffleBlockOutputStream): ShuffleMapOutputObjectWriter = {
+    new ShuffleMapOutputObjectWriter(
+      blockId,
+      serializerManager,
+      serInstance,
+      context.taskMetrics().shuffleWriteMetrics,
+      partitionStream)
   }
 
   def stop(): Unit = {
@@ -785,7 +822,7 @@ private[spark] class ExternalSorter[K, V, C](
         val inMemoryIterator = new WritablePartitionedIterator {
           private[this] var cur = if (upstream.hasNext) upstream.next() else null
 
-          def writeNext(writer: DiskBlockObjectWriter): Unit = {
+          def writeNext(writer: PairsWriter): Unit = {
             writer.write(cur._1._2, cur._2)
             cur = if (upstream.hasNext) upstream.next() else null
           }

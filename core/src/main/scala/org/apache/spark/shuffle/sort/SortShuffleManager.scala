@@ -20,8 +20,10 @@ package org.apache.spark.shuffle.sort
 import java.util.concurrent.ConcurrentHashMap
 
 import org.apache.spark._
-import org.apache.spark.internal.Logging
+import org.apache.spark.api.shuffle.ShuffleIO
+import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.shuffle._
+import org.apache.spark.util.Utils
 
 /**
  * In sort-based shuffle, incoming records are sorted according to their target partition ids, then
@@ -79,6 +81,14 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
    */
   private[this] val numMapsForShuffle = new ConcurrentHashMap[Int, Int]()
 
+  private val shuffleIo = Utils.loadExtensions(
+    classOf[ShuffleIO], Seq(conf.get(config.SHUFFLE_IO_PLUGIN_CLASS)), conf)
+  require(shuffleIo.size == 1, s"Exactly 1 shuffle plugin must be loaded. Got: " +
+    conf.get(config.SHUFFLE_IO_PLUGIN_CLASS))
+  private val executorShuffleComponents = shuffleIo.head.executorComponents()
+
+  private var initialized = false
+
   override val shuffleBlockResolver = new IndexShuffleBlockResolver(conf)
 
   /**
@@ -116,6 +126,7 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
       endPartition: Int,
       context: TaskContext,
       metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
+    initializeExecutorComponentsIfNecessary()
     new BlockStoreShuffleReader(
       handle.asInstanceOf[BaseShuffleHandle[K, _, C]],
       startPartition, endPartition, context, metrics)
@@ -127,6 +138,7 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
       mapId: Int,
       context: TaskContext,
       metrics: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+    initializeExecutorComponentsIfNecessary()
     numMapsForShuffle.putIfAbsent(
       handle.shuffleId, handle.asInstanceOf[BaseShuffleHandle[_, _, _]].numMaps)
     val env = SparkEnv.get
@@ -134,23 +146,23 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
       case unsafeShuffleHandle: SerializedShuffleHandle[K @unchecked, V @unchecked] =>
         new UnsafeShuffleWriter(
           env.blockManager,
-          shuffleBlockResolver.asInstanceOf[IndexShuffleBlockResolver],
           context.taskMemoryManager(),
           unsafeShuffleHandle,
           mapId,
           context,
           env.conf,
-          metrics)
+          metrics,
+          executorShuffleComponents)
       case bypassMergeSortHandle: BypassMergeSortShuffleHandle[K @unchecked, V @unchecked] =>
         new BypassMergeSortShuffleWriter(
           env.blockManager,
-          shuffleBlockResolver.asInstanceOf[IndexShuffleBlockResolver],
           bypassMergeSortHandle,
           mapId,
           env.conf,
-          metrics)
+          metrics,
+          executorShuffleComponents)
       case other: BaseShuffleHandle[K @unchecked, V @unchecked, _] =>
-        new SortShuffleWriter(shuffleBlockResolver, other, mapId, context)
+        new SortShuffleWriter(other, mapId, context, executorShuffleComponents)
     }
   }
 
@@ -167,6 +179,14 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
   /** Shut down this ShuffleManager. */
   override def stop(): Unit = {
     shuffleBlockResolver.stop()
+  }
+
+  private def initializeExecutorComponentsIfNecessary(): Unit = synchronized {
+    if (!initialized) {
+      executorShuffleComponents.intitializeExecutor(
+        conf.getAppId, SparkEnv.get.executorId)
+      initialized = true
+    }
   }
 }
 

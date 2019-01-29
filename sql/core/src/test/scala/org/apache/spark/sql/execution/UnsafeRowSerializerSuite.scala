@@ -125,7 +125,7 @@ class UnsafeRowSerializerSuite extends SparkFunSuite with LocalSparkSession {
     assert(sorter.numSpills > 0)
 
     // Merging spilled files should not throw assertion error
-    sorter.writePartitionedFile(ShuffleBlockId(0, 0, 0), outputFile)
+    sorter.writeToOutputWriterAndCommit(ShuffleBlockId(0, 0, 0), outputFile)
   }
 
   test("SPARK-10403: unsafe row serializer with SortShuffleManager") {
