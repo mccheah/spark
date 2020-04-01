@@ -17,11 +17,16 @@
 
 package org.apache.spark.shuffle
 
+import scala.collection.JavaConverters._
+import scala.compat.java8.OptionConverters._
+
 import org.apache.spark._
 import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.serializer.SerializerManager
-import org.apache.spark.storage.{BlockId, BlockManager, BlockManagerId, ShuffleBlockFetcherIterator}
+import org.apache.spark.shuffle.api.ShuffleExecutorComponents
+import org.apache.spark.shuffle.api.metadata.ShuffleBlockInfo
+import org.apache.spark.storage.{BlockId, BlockManager, BlockManagerId, ShuffleBlockFetcherIterator, ShuffleBlockId}
 import org.apache.spark.util.CompletionIterator
 import org.apache.spark.util.collection.ExternalSorter
 
@@ -30,9 +35,12 @@ import org.apache.spark.util.collection.ExternalSorter
  */
 private[spark] class BlockStoreShuffleReader[K, C](
     handle: BaseShuffleHandle[K, _, C],
-    blocksByAddress: Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])],
+    blocksToFetch: BlocksToFetch,
+    startPartition: Int,
+    endPartition: Int,
     context: TaskContext,
     readMetrics: ShuffleReadMetricsReporter,
+    shuffleExecutorComponents: ShuffleExecutorComponents,
     serializerManager: SerializerManager = SparkEnv.get.serializerManager,
     blockManager: BlockManager = SparkEnv.get.blockManager,
     mapOutputTracker: MapOutputTracker = SparkEnv.get.mapOutputTracker,
@@ -41,51 +49,36 @@ private[spark] class BlockStoreShuffleReader[K, C](
 
   private val dep = handle.dependency
 
-  private def fetchContinuousBlocksInBatch: Boolean = {
-    val conf = SparkEnv.get.conf
-    val serializerRelocatable = dep.serializer.supportsRelocationOfSerializedObjects
-    val compressed = conf.get(config.SHUFFLE_COMPRESS)
-    val codecConcatenation = if (compressed) {
-      CompressionCodec.supportsConcatenationOfSerializedStreams(CompressionCodec.createCodec(conf))
-    } else {
-      true
-    }
-    val useOldFetchProtocol = conf.get(config.SHUFFLE_USE_OLD_FETCH_PROTOCOL)
-
-    val doBatchFetch = shouldBatchFetch && serializerRelocatable &&
-      (!compressed || codecConcatenation) && !useOldFetchProtocol
-    if (shouldBatchFetch && !doBatchFetch) {
-      logDebug("The feature tag of continuous shuffle block fetching is set to true, but " +
-        "we can not enable the feature because other conditions are not satisfied. " +
-        s"Shuffle compress: $compressed, serializer relocatable: $serializerRelocatable, " +
-        s"codec concatenation: $codecConcatenation, use old shuffle fetch protocol: " +
-        s"$useOldFetchProtocol.")
-    }
-    doBatchFetch
-  }
-
   /** Read the combined key-values for this reduce task */
   override def read(): Iterator[Product2[K, C]] = {
-    val wrappedStreams = new ShuffleBlockFetcherIterator(
-      context,
-      blockManager.blockStoreClient,
-      blockManager,
-      blocksByAddress,
-      serializerManager.wrapStream,
-      // Note: we use getSizeAsMb when no suffix is provided for backwards compatibility
-      SparkEnv.get.conf.get(config.REDUCER_MAX_SIZE_IN_FLIGHT) * 1024 * 1024,
-      SparkEnv.get.conf.get(config.REDUCER_MAX_REQS_IN_FLIGHT),
-      SparkEnv.get.conf.get(config.REDUCER_MAX_BLOCKS_IN_FLIGHT_PER_ADDRESS),
-      SparkEnv.get.conf.get(config.MAX_REMOTE_BLOCK_SIZE_FETCH_TO_MEM),
-      SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT),
-      SparkEnv.get.conf.get(config.SHUFFLE_DETECT_CORRUPT_MEMORY),
-      readMetrics,
-      fetchContinuousBlocksInBatch).toCompletionIterator
+    val wrappedStreams = if (shouldBatchFetch) {
+      shuffleExecutorComponents.getPartitionReadersForRange(
+        blocksToFetch.blocks
+          .flatMap { case (location, blocks) =>
+            blocks.map(block => {
+              extractShuffleBlockInfo(location, block)
+            })
+          }.asJava,
+        startPartition,
+        endPartition,
+        handle.dependency,
+        blocksToFetch.metadata.asJava)
+    } else {
+      shuffleExecutorComponents.getPartitionReaders(
+        blocksToFetch.blocks
+          .flatMap { case (location, blocks) =>
+            blocks.map(block => {
+              extractShuffleBlockInfo(location, block)
+            })
+          }.asJava,
+        handle.dependency,
+        blocksToFetch.metadata.asJava)
+    }
 
     val serializerInstance = dep.serializer.newInstance()
 
     // Create a key/value iterator for each stream
-    val recordIter = wrappedStreams.flatMap { case (blockId, wrappedStream) =>
+    val recordIter = wrappedStreams.asScala.iterator.flatMap { wrappedStream =>
       // Note: the asKeyValueIterator below wraps a key/value iterator inside of a
       // NextIterator. The NextIterator makes sure that close() is called on the
       // underlying InputStream when all records have been read.
@@ -145,5 +138,16 @@ private[spark] class BlockStoreShuffleReader[K, C](
         // or(and) sorter may have consumed previous interruptible iterator.
         new InterruptibleIterator[Product2[K, C]](context, resultIter)
     }
+  }
+
+  private def extractShuffleBlockInfo(location: BlockManagerId, block: (BlockId, Long, Int)) = {
+    val shufBlockId = block._1.asInstanceOf[ShuffleBlockId]
+    new ShuffleBlockInfo(
+      shufBlockId.shuffleId,
+      block._3, // mapIndex
+      shufBlockId.reduceId,
+      block._2, // block length
+      shufBlockId.mapId.longValue(), // map id - the map task attempt id
+      location)
   }
 }

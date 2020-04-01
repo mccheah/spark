@@ -73,7 +73,7 @@ abstract class ShuffleSuite extends SparkFunSuite with Matchers with LocalSparkC
 
     // All blocks must have non-zero size
     (0 until NUM_BLOCKS).foreach { id =>
-      val statuses = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(shuffleId, id)
+      val statuses = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(shuffleId, id).blocks
       assert(statuses.forall(_._2.forall(blockIdSizePair => blockIdSizePair._2 > 0)))
     }
   }
@@ -112,7 +112,7 @@ abstract class ShuffleSuite extends SparkFunSuite with Matchers with LocalSparkC
     assert(c.count === 4)
 
     val blockSizes = (0 until NUM_BLOCKS).flatMap { id =>
-      val statuses = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(shuffleId, id)
+      val statuses = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(shuffleId, id).blocks
       statuses.flatMap(_._2.map(_._2))
     }
     val nonEmptyBlocks = blockSizes.filter(x => x > 0)
@@ -137,7 +137,7 @@ abstract class ShuffleSuite extends SparkFunSuite with Matchers with LocalSparkC
     assert(c.count === 4)
 
     val blockSizes = (0 until NUM_BLOCKS).flatMap { id =>
-      val statuses = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(shuffleId, id)
+      val statuses = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(shuffleId, id).blocks
       statuses.flatMap(_._2.map(_._2))
     }
     val nonEmptyBlocks = blockSizes.filter(x => x > 0)
@@ -411,10 +411,14 @@ abstract class ShuffleSuite extends SparkFunSuite with Matchers with LocalSparkC
 
     val taskContext = new TaskContextImpl(
       1, 0, 0, 2L, 0, taskMemoryManager, new Properties, metricsSystem)
-    val metrics = taskContext.taskMetrics.createTempShuffleReadMetrics()
-    val reader = manager.getReader[Int, Int](shuffleHandle, 0, 1, taskContext, metrics)
-    TaskContext.unset()
-    val readData = reader.read().toIndexedSeq
+    TaskContext.setTaskContext(taskContext)
+    val readData = try {
+      val metrics = taskContext.taskMetrics.createTempShuffleReadMetrics()
+      val reader = manager.getReader[Int, Int](shuffleHandle, 0, 1, taskContext, metrics)
+      reader.read().toIndexedSeq
+    } finally {
+      TaskContext.unset()
+    }
     assert(readData === data1.toIndexedSeq || readData === data2.toIndexedSeq)
 
     manager.unregisterShuffle(0)

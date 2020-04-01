@@ -118,9 +118,10 @@ class BypassMergeSortShuffleWriterSuite extends SparkFunSuite with BeforeAndAfte
     when(diskBlockManager.getFile(any[BlockId])).thenAnswer { invocation =>
       blockIdToFileMap(invocation.getArguments.head.asInstanceOf[BlockId])
     }
+    val serializerManager = new SerializerManager(new JavaSerializer(conf), conf)
 
     shuffleExecutorComponents = new LocalDiskShuffleExecutorComponents(
-      conf, blockManager, blockResolver)
+      conf, blockManager, serializerManager, blockResolver)
   }
 
   override def afterEach(): Unit = {

@@ -27,6 +27,7 @@ import org.apache.spark._
 import org.apache.spark.internal.config
 import org.apache.spark.network.buffer.{ManagedBuffer, NioManagedBuffer}
 import org.apache.spark.serializer.{JavaSerializer, SerializerManager}
+import org.apache.spark.shuffle.sort.io.LocalDiskShuffleExecutorComponents
 import org.apache.spark.storage.{BlockManager, BlockManagerId, ShuffleBlockId}
 
 /**
@@ -111,7 +112,7 @@ class BlockStoreShuffleReaderSuite extends SparkFunSuite with LocalSparkContext 
         val shuffleBlockId = ShuffleBlockId(shuffleId, mapId, reduceId)
         (shuffleBlockId, byteOutputStream.size().toLong, mapId)
       }
-      Seq((localBlockManagerId, shuffleBlockIdsAndSizes)).toIterator
+      BlocksToFetch(Seq((localBlockManagerId, shuffleBlockIdsAndSizes)), None)
     }
 
     // Create a mocked shuffle handle to pass into HashShuffleReader.
@@ -130,14 +131,25 @@ class BlockStoreShuffleReaderSuite extends SparkFunSuite with LocalSparkContext 
         .set(config.SHUFFLE_SPILL_COMPRESS, false))
 
     val taskContext = TaskContext.empty()
+    TaskContext.setTaskContext(taskContext)
     val metrics = taskContext.taskMetrics.createTempShuffleReadMetrics()
     val blocksByAddress = mapOutputTracker.getMapSizesByExecutorId(
       shuffleId, reduceId, reduceId + 1)
+    val shuffleExecutorComponents = new LocalDiskShuffleExecutorComponents(
+      testConf,
+      blockManager,
+      serializerManager,
+      new IndexShuffleBlockResolver(testConf, blockManager)
+    )
+
     val shuffleReader = new BlockStoreShuffleReader(
       shuffleHandle,
       blocksByAddress,
+      reduceId,
+      reduceId + 1,
       taskContext,
       metrics,
+      shuffleExecutorComponents,
       serializerManager,
       blockManager)
 

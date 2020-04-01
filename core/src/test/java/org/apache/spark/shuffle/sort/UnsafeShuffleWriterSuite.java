@@ -79,6 +79,7 @@ public class UnsafeShuffleWriterSuite {
   SparkConf conf;
   final Serializer serializer = new KryoSerializer(new SparkConf());
   TaskMetrics taskMetrics;
+  LocalDiskShuffleExecutorComponents shuffleExecutorComponents;
 
   @Mock(answer = RETURNS_SMART_NULLS) BlockManager blockManager;
   @Mock(answer = RETURNS_SMART_NULLS) IndexShuffleBlockResolver shuffleBlockResolver;
@@ -169,6 +170,8 @@ public class UnsafeShuffleWriterSuite {
     when(shuffleDep.serializer()).thenReturn(serializer);
     when(shuffleDep.partitioner()).thenReturn(hashPartitioner);
     when(taskContext.taskMemoryManager()).thenReturn(taskMemoryManager);
+    shuffleExecutorComponents = new LocalDiskShuffleExecutorComponents(
+        conf, blockManager, manager, shuffleBlockResolver);
   }
 
   private UnsafeShuffleWriter<Object, Object> createWriter(boolean transferToEnabled) {
@@ -181,7 +184,7 @@ public class UnsafeShuffleWriterSuite {
       taskContext,
       conf,
       taskContext.taskMetrics().shuffleWriteMetrics(),
-      new LocalDiskShuffleExecutorComponents(conf, blockManager, shuffleBlockResolver));
+      shuffleExecutorComponents);
   }
 
   private void assertSpillFilesWereCleanedUp() {
@@ -540,7 +543,7 @@ public class UnsafeShuffleWriterSuite {
         taskContext,
         conf,
         taskContext.taskMetrics().shuffleWriteMetrics(),
-        new LocalDiskShuffleExecutorComponents(conf, blockManager, shuffleBlockResolver));
+        shuffleExecutorComponents);
 
     // Peak memory should be monotonically increasing. More specifically, every time
     // we allocate a new page it should increase by exactly the size of the page.

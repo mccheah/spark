@@ -17,6 +17,8 @@
 
 package org.apache.spark.shuffle.api.metadata;
 
+import java.util.Optional;
+
 /**
  * :: Private ::
  *
@@ -53,4 +55,13 @@ public interface ShuffleOutputTracker {
    * shuffles.
    */
   void removeMapOutput(int shuffleId, int mapId, long mapTaskAttemptId);
+
+  /**
+   * Called when a shuffle reduce stage starts, and shuffle readers thus need extra metadata
+   * to read shuffle blocks.
+   * <p>
+   * Implementations can return an empty value if no shuffle metadata is available for the given
+   * shuffle id.
+   */
+  Optional<ShuffleMetadata> getShuffleMetadata(int shuffleId);
 }

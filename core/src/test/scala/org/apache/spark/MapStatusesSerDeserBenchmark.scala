@@ -17,10 +17,12 @@
 
 package org.apache.spark
 
+import org.mockito.Mockito
 import org.scalatest.Assertions._
 
 import org.apache.spark.benchmark.Benchmark
 import org.apache.spark.benchmark.BenchmarkBase
+import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.{CompressedMapStatus, MapTaskResult}
 import org.apache.spark.storage.BlockManagerId
 

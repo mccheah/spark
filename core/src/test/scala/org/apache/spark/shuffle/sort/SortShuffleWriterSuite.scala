@@ -24,7 +24,7 @@ import org.scalatest.Matchers
 
 import org.apache.spark.{Partitioner, SharedSparkContext, ShuffleDependency, SparkFunSuite}
 import org.apache.spark.memory.MemoryTestingUtils
-import org.apache.spark.serializer.JavaSerializer
+import org.apache.spark.serializer.{JavaSerializer, SerializerManager}
 import org.apache.spark.shuffle.{BaseShuffleHandle, IndexShuffleBlockResolver}
 import org.apache.spark.shuffle.api.ShuffleExecutorComponents
 import org.apache.spark.shuffle.sort.io.LocalDiskShuffleExecutorComponents
@@ -43,6 +43,7 @@ class SortShuffleWriterSuite extends SparkFunSuite with SharedSparkContext with 
   private val shuffleBlockResolver = new IndexShuffleBlockResolver(conf)
   private val serializer = new JavaSerializer(conf)
   private var shuffleExecutorComponents: ShuffleExecutorComponents = _
+  private val serializerManager = new SerializerManager(serializer, conf)
 
   override def beforeEach(): Unit = {
     super.beforeEach()
@@ -59,8 +60,9 @@ class SortShuffleWriterSuite extends SparkFunSuite with SharedSparkContext with 
       when(dependency.keyOrdering).thenReturn(None)
       new BaseShuffleHandle(shuffleId, dependency)
     }
+
     shuffleExecutorComponents = new LocalDiskShuffleExecutorComponents(
-      conf, blockManager, shuffleBlockResolver)
+      conf, blockManager, serializerManager, shuffleBlockResolver)
   }
 
   override def afterAll(): Unit = {

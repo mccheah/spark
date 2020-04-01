@@ -196,7 +196,7 @@ abstract class SchedulerIntegrationSuite[T <: MockBackend: ClassTag] extends Spa
       // really we should have already thrown an exception rather than fail either of these
       // asserts, but just to be extra defensive let's double check the statuses are OK
       assert(statuses != null)
-      assert(statuses.nonEmpty)
+      assert(statuses.blocks.nonEmpty)
     }
   }
 
@@ -584,7 +584,7 @@ class BasicSchedulerIntegrationSuite extends SchedulerIntegrationSuite[SingleCor
           val shuffleId =
             scheduler.stageIdToStage(stage).asInstanceOf[ShuffleMapStage].shuffleDep.shuffleId
           backend.taskSuccess(taskDescription,
-            DAGSchedulerSuite.makeMapStatus("hostA", shuffleIdToOutputParts(shuffleId)))
+            DAGSchedulerSuite.makeMapTaskResult("hostA", shuffleIdToOutputParts(shuffleId)))
         case (4, 0, partition) =>
           backend.taskSuccess(taskDescription, 4321 + partition)
       }
@@ -619,7 +619,7 @@ class BasicSchedulerIntegrationSuite extends SchedulerIntegrationSuite[SingleCor
 
       (task.stageId, task.stageAttemptId, task.partitionId) match {
         case (0, _, _) =>
-          backend.taskSuccess(taskDescription, DAGSchedulerSuite.makeMapStatus("hostA", 10))
+          backend.taskSuccess(taskDescription, DAGSchedulerSuite.makeMapTaskResult("hostA", 10))
         case (1, 0, 0) =>
           val fetchFailed = FetchFailed(
             DAGSchedulerSuite.makeBlockManagerId("hostA"), shuffleId, 0L, 0, 0, "ignored")

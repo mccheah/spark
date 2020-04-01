@@ -17,7 +17,10 @@
 
 package org.apache.spark.shuffle.sort.io;
 
+import java.util.Optional;
+
 import org.apache.spark.shuffle.api.metadata.MapOutputMetadata;
+import org.apache.spark.shuffle.api.metadata.ShuffleMetadata;
 import org.apache.spark.shuffle.api.metadata.ShuffleOutputTracker;
 import org.apache.spark.storage.BlockManagerMaster;
 
@@ -30,8 +33,7 @@ public final class LocalDiskShuffleOutputTracker implements ShuffleOutputTracker
   }
 
   @Override
-  public void registerShuffle(int shuffleId) {
-  }
+  public void registerShuffle(int shuffleId) {}
 
   @Override
   public void unregisterShuffle(int shuffleId, boolean blocking) {
@@ -40,11 +42,13 @@ public final class LocalDiskShuffleOutputTracker implements ShuffleOutputTracker
 
   @Override
   public void registerMapOutput(
-      int shuffleId, int mapId, long mapTaskAttemptId, MapOutputMetadata mapOutputMetadata) {
-  }
+      int shuffleId, int mapId, long mapTaskAttemptId, MapOutputMetadata mapOutputMetadata) {}
 
   @Override
-  public void removeMapOutput(int shuffleId, int mapId, long mapTaskAttemptId) {
+  public void removeMapOutput(int shuffleId, int mapId, long mapTaskAttemptId) {}
 
+  @Override
+  public Optional<ShuffleMetadata> getShuffleMetadata(int shuffleId) {
+    return Optional.empty();
   }
 }

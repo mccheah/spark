@@ -23,6 +23,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.{HashMap, ListBuffer, Map}
+import scala.compat.java8.OptionConverters._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.Duration
 import scala.reflect.ClassTag
@@ -30,6 +31,7 @@ import scala.util.control.NonFatal
 
 import org.apache.commons.io.output.{ByteArrayOutputStream => ApacheByteArrayOutputStream}
 
+import org.apache.spark.BlocksToFetch.BlocksByExecutorId
 import org.apache.spark.broadcast.{Broadcast, BroadcastManager}
 import org.apache.spark.internal.Logging
 import org.apache.spark.internal.config._
@@ -37,7 +39,7 @@ import org.apache.spark.io.CompressionCodec
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpoint, RpcEndpointRef, RpcEnv}
 import org.apache.spark.scheduler.{ExecutorCacheTaskLocation, MapStatus, MapTaskResult}
 import org.apache.spark.shuffle.MetadataFetchFailedException
-import org.apache.spark.shuffle.api.metadata.{MapOutputMetadata, ShuffleOutputTracker}
+import org.apache.spark.shuffle.api.metadata.{MapOutputMetadata, ShuffleMetadata, ShuffleOutputTracker}
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockId}
 import org.apache.spark.util._
 
@@ -236,6 +238,17 @@ private class ShuffleStatus(
     result
   }
 
+  def serializedShuffleMetadata(conf: SparkConf): Array[Byte] = {
+    withReadLock {
+      MapOutputTracker.serializeShuffleMetadata(
+        conf, shuffleOutputTracker.flatMap(_.getShuffleMetadata(shuffleId).asScala))
+    }
+  }
+
+  def getShuffleMetadata: Option[ShuffleMetadata] = withReadLock {
+    shuffleOutputTracker.flatMap(_.getShuffleMetadata(shuffleId).asScala)
+  }
+
   // Used in testing.
   def hasCachedSerializedBroadcast: Boolean = withReadLock {
     cachedSerializedBroadcast != null
@@ -338,8 +351,7 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
   }
 
   // For testing
-  def getMapSizesByExecutorId(shuffleId: Int, reduceId: Int)
-      : Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])] = {
+  def getMapSizesByExecutorId(shuffleId: Int, reduceId: Int): BlocksToFetch = {
     getMapSizesByExecutorId(shuffleId, reduceId, reduceId + 1)
   }
 
@@ -355,8 +367,7 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
   def getMapSizesByExecutorId(
       shuffleId: Int,
       startPartition: Int,
-      endPartition: Int)
-  : Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])]
+      endPartition: Int): BlocksToFetch
 
   /**
    * Called from executors to get the server URIs and output sizes for each shuffle block that
@@ -374,7 +385,7 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
       startMapIndex: Int,
       endMapIndex: Int,
       startPartition: Int,
-      endPartition: Int): Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])]
+      endPartition: Int): BlocksToFetch
 
   /**
    * Deletes map output status information for the specified shuffle stage.
@@ -473,8 +484,10 @@ private[spark] class MapOutputTrackerMaster(
               " to " + hostPort)
             val shuffleStatus = shuffleStatuses.get(shuffleId).head
             context.reply(
-              shuffleStatus.serializedMapStatus(broadcastManager, isLocal, minSizeForBroadcast,
-                conf))
+              SerializedShuffleInfo(
+                shuffleStatus.serializedMapStatus(
+                  broadcastManager, isLocal, minSizeForBroadcast, conf),
+                shuffleStatus.serializedShuffleMetadata(conf)))
           } catch {
             case NonFatal(e) => logError(e.getMessage, e)
           }
@@ -497,7 +510,7 @@ private[spark] class MapOutputTrackerMaster(
     _shuffleOutputTracker = shuffleOutputTracker
   }
 
-  def registerShuffle(shuffleId: Int, numMaps: Int): Unit = {
+  def registerShuffle[K, V, C](shuffleId: Int, numMaps: Int): Unit = {
     if (shuffleStatuses.put(
         shuffleId,
         new ShuffleStatus(shuffleId, numMaps, _shuffleOutputTracker)).isDefined) {
@@ -767,17 +780,24 @@ private[spark] class MapOutputTrackerMaster(
   def getMapSizesByExecutorId(
       shuffleId: Int,
       startPartition: Int,
-      endPartition: Int)
-  : Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])] = {
+      endPartition: Int): BlocksToFetch = {
     logDebug(s"Fetching outputs for shuffle $shuffleId, partitions $startPartition-$endPartition")
     shuffleStatuses.get(shuffleId) match {
       case Some (shuffleStatus) =>
         shuffleStatus.withMapStatuses { statuses =>
-          MapOutputTracker.convertMapStatuses(
-            shuffleId, startPartition, endPartition, statuses, 0, shuffleStatus.mapStatuses.length)
+          BlocksToFetch(
+            MapOutputTracker.convertMapStatuses(
+              shuffleId,
+              startPartition,
+              endPartition,
+              statuses,
+              0,
+              shuffleStatus.mapStatuses.length),
+            shuffleStatus.getShuffleMetadata)
         }
       case None =>
-        Iterator.empty
+        BlocksToFetch(
+          Iterable.empty, _shuffleOutputTracker.flatMap(_.getShuffleMetadata(shuffleId).asScala))
     }
   }
 
@@ -786,17 +806,20 @@ private[spark] class MapOutputTrackerMaster(
       startMapIndex: Int,
       endMapIndex: Int,
       startPartition: Int,
-      endPartition: Int): Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])] = {
+      endPartition: Int): BlocksToFetch = {
     logDebug(s"Fetching outputs for shuffle $shuffleId, mappers $startMapIndex-$endMapIndex" +
       s"partitions $startPartition-$endPartition")
     shuffleStatuses.get(shuffleId) match {
       case Some(shuffleStatus) =>
         shuffleStatus.withMapStatuses { statuses =>
-          MapOutputTracker.convertMapStatuses(
-            shuffleId, startPartition, endPartition, statuses, startMapIndex, endMapIndex)
+          BlocksToFetch(
+            MapOutputTracker.convertMapStatuses(
+              shuffleId, startPartition, endPartition, statuses, startMapIndex, endMapIndex),
+            shuffleStatus.getShuffleMetadata)
         }
       case None =>
-        Iterator.empty
+        BlocksToFetch(
+          Iterable.empty, _shuffleOutputTracker.flatMap(_.getShuffleMetadata(shuffleId).asScala))
     }
   }
 
@@ -817,8 +840,8 @@ private[spark] class MapOutputTrackerMaster(
  */
 private[spark] class MapOutputTrackerWorker(conf: SparkConf) extends MapOutputTracker(conf) {
 
-  val mapStatuses: Map[Int, Array[MapStatus]] =
-    new ConcurrentHashMap[Int, Array[MapStatus]]().asScala
+  val shuffleInfos: Map[Int, ShuffleInfo] =
+    new ConcurrentHashMap[Int, ShuffleInfo]().asScala
 
   /**
    * A [[KeyLock]] whose key is a shuffle id to ensure there is only one thread fetching
@@ -830,17 +853,19 @@ private[spark] class MapOutputTrackerWorker(conf: SparkConf) extends MapOutputTr
   override def getMapSizesByExecutorId(
       shuffleId: Int,
       startPartition: Int,
-      endPartition: Int)
-    : Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])] = {
+      endPartition: Int): BlocksToFetch = {
     logDebug(s"Fetching outputs for shuffle $shuffleId, partitions $startPartition-$endPartition")
-    val statuses = getStatuses(shuffleId, conf)
+    val shuffleInfo = getShuffleInfo(shuffleId, conf)
+    val mapStatuses = shuffleInfo.mapStatuses
     try {
+      BlocksToFetch(
       MapOutputTracker.convertMapStatuses(
-        shuffleId, startPartition, endPartition, statuses, 0, statuses.length)
+        shuffleId, startPartition, endPartition, mapStatuses, 0, mapStatuses.length),
+        shuffleInfo.shuffleMetadata)
     } catch {
       case e: MetadataFetchFailedException =>
         // We experienced a fetch failure so our mapStatuses cache is outdated; clear it:
-        mapStatuses.clear()
+        shuffleInfos.clear()
         throw e
     }
   }
@@ -850,17 +875,20 @@ private[spark] class MapOutputTrackerWorker(conf: SparkConf) extends MapOutputTr
       startMapIndex: Int,
       endMapIndex: Int,
       startPartition: Int,
-      endPartition: Int): Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])] = {
+      endPartition: Int): BlocksToFetch = {
     logDebug(s"Fetching outputs for shuffle $shuffleId, mappers $startMapIndex-$endMapIndex" +
       s"partitions $startPartition-$endPartition")
-    val statuses = getStatuses(shuffleId, conf)
+    val shuffleInfo = getShuffleInfo(shuffleId, conf)
+    val mapStatuses = shuffleInfo.mapStatuses
     try {
-      MapOutputTracker.convertMapStatuses(
-        shuffleId, startPartition, endPartition, statuses, startMapIndex, endMapIndex)
+      BlocksToFetch(
+        MapOutputTracker.convertMapStatuses(
+          shuffleId, startPartition, endPartition, mapStatuses, startMapIndex, endMapIndex),
+        shuffleInfo.shuffleMetadata)
     } catch {
       case e: MetadataFetchFailedException =>
         // We experienced a fetch failure so our mapStatuses cache is outdated; clear it:
-        mapStatuses.clear()
+        shuffleInfos.clear()
         throw e
     }
   }
@@ -871,33 +899,37 @@ private[spark] class MapOutputTrackerWorker(conf: SparkConf) extends MapOutputTr
    *
    * (It would be nice to remove this restriction in the future.)
    */
-  private def getStatuses(shuffleId: Int, conf: SparkConf): Array[MapStatus] = {
-    val statuses = mapStatuses.get(shuffleId).orNull
-    if (statuses == null) {
+  private def getShuffleInfo(shuffleId: Int, conf: SparkConf): ShuffleInfo = {
+    val shuffleInfo = shuffleInfos.get(shuffleId).orNull
+    if (shuffleInfo == null) {
       logInfo("Don't have map outputs for shuffle " + shuffleId + ", fetching them")
       val startTimeNs = System.nanoTime()
       fetchingLock.withLock(shuffleId) {
-        var fetchedStatuses = mapStatuses.get(shuffleId).orNull
-        if (fetchedStatuses == null) {
+        var fetchedInfo = shuffleInfos.get(shuffleId).orNull
+        if (fetchedInfo == null) {
           logInfo("Doing the fetch; tracker endpoint = " + trackerEndpoint)
-          val fetchedBytes = askTracker[Array[Byte]](GetMapOutputStatuses(shuffleId))
-          fetchedStatuses = MapOutputTracker.deserializeMapStatuses(fetchedBytes, conf)
+          val serializedInfo = askTracker[SerializedShuffleInfo](GetMapOutputStatuses(shuffleId))
+          val metadata = MapOutputTracker.deserializeShuffleMetadata(
+            serializedInfo.serializedShuffleMetadata, conf)
+          val fetchedStatuses = MapOutputTracker.deserializeMapStatuses(
+            serializedInfo.serializedMapStatuses, conf)
+          fetchedInfo = ShuffleInfo(fetchedStatuses, metadata)
           logInfo("Got the output locations")
-          mapStatuses.put(shuffleId, fetchedStatuses)
+          shuffleInfos.put(shuffleId, fetchedInfo)
         }
         logDebug(s"Fetching map output statuses for shuffle $shuffleId took " +
           s"${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTimeNs)} ms")
-        fetchedStatuses
+        fetchedInfo
       }
     } else {
-      statuses
+      shuffleInfo
     }
   }
 
 
   /** Unregister shuffle data. */
   def unregisterShuffle(shuffleId: Int, blocking: Boolean): Unit = {
-    mapStatuses.remove(shuffleId)
+    shuffleInfos.remove(shuffleId)
   }
 
   /**
@@ -910,7 +942,7 @@ private[spark] class MapOutputTrackerWorker(conf: SparkConf) extends MapOutputTr
       if (newEpoch > epoch) {
         logInfo("Updating epoch to " + newEpoch + " and clearing cache")
         epoch = newEpoch
-        mapStatuses.clear()
+        shuffleInfos.clear()
       }
     }
   }
@@ -1027,7 +1059,7 @@ private[spark] object MapOutputTracker extends Logging {
       endPartition: Int,
       statuses: Array[MapStatus],
       startMapIndex : Int,
-      endMapIndex: Int): Iterator[(BlockManagerId, Seq[(BlockId, Long, Int)])] = {
+      endMapIndex: Int): BlocksByExecutorId = {
     assert (statuses != null)
     val splitsByAddress = new HashMap[BlockManagerId, ListBuffer[(BlockId, Long, Int)]]
     val iter = statuses.iterator.zipWithIndex
@@ -1047,6 +1079,34 @@ private[spark] object MapOutputTracker extends Logging {
       }
     }
 
-    splitsByAddress.iterator
+    splitsByAddress
+  }
+
+  def serializeShuffleMetadata(conf: SparkConf, metadata: Option[ShuffleMetadata]): Array[Byte] = {
+    val out = new ApacheByteArrayOutputStream()
+    val codec = CompressionCodec.createCodec(conf, conf.get(MAP_STATUS_COMPRESSION_CODEC))
+    val objOut = new ObjectOutputStream(codec.compressedOutputStream(out))
+    Utils.tryWithSafeFinally {
+      // Since statuses can be modified in parallel, sync on it
+      objOut.writeObject(metadata)
+    } {
+      objOut.close()
+    }
+    out.toByteArray
+  }
+
+  def deserializeShuffleMetadata(serializedMetadata: Array[Byte], conf: SparkConf)
+    : Option[ShuffleMetadata] = {
+    val codec = CompressionCodec.createCodec(conf, conf.get(MAP_STATUS_COMPRESSION_CODEC))
+    // The ZStd codec is wrapped in a `BufferedInputStream` which avoids overhead excessive
+    // of JNI call while trying to decompress small amount of data for each element
+    // of `MapStatuses`
+    val objIn = new ObjectInputStream(codec.compressedInputStream(
+      new ByteArrayInputStream(serializedMetadata)))
+    Utils.tryWithSafeFinally {
+      objIn.readObject().asInstanceOf[Option[ShuffleMetadata]]
+    } {
+      objIn.close()
+    }
   }
 }

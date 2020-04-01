@@ -75,7 +75,7 @@ class MapOutputTrackerSuite extends SparkFunSuite {
       MapTaskResult(
         MapStatus(BlockManagerId("b", "hostB", 1000), Array(10000L, 1000L), 6), None))
     val statuses = tracker.getMapSizesByExecutorId(10, 0)
-    assert(statuses.toSet ===
+    assert(statuses.blocks.toSet ===
       Seq((BlockManagerId("a", "hostA", 1000),
         ArrayBuffer((ShuffleBlockId(10, 5, 0), size1000, 0))),
           (BlockManagerId("b", "hostB", 1000),
@@ -109,11 +109,11 @@ class MapOutputTrackerSuite extends SparkFunSuite {
           BlockManagerId("b", "hostB", 1000),
           Array(compressedSize10000, compressedSize1000), 6), None))
     assert(tracker.containsShuffle(10))
-    assert(tracker.getMapSizesByExecutorId(10, 0).nonEmpty)
+    assert(tracker.getMapSizesByExecutorId(10, 0).blocks.nonEmpty)
     assert(0 == tracker.getNumCachedSerializedBroadcast)
     tracker.unregisterShuffle(10, true)
     assert(!tracker.containsShuffle(10))
-    assert(tracker.getMapSizesByExecutorId(10, 0).isEmpty)
+    assert(tracker.getMapSizesByExecutorId(10, 0).blocks.isEmpty)
 
     tracker.stop()
     rpcEnv.shutdown()
@@ -184,7 +184,7 @@ class MapOutputTrackerSuite extends SparkFunSuite {
         MapStatus(BlockManagerId("a", "hostA", 1000), Array(1000L), 5),
         None))
     slaveTracker.updateEpoch(masterTracker.getEpoch)
-    assert(slaveTracker.getMapSizesByExecutorId(10, 0).toSeq ===
+    assert(slaveTracker.getMapSizesByExecutorId(10, 0).blocks.toSeq ===
       Seq((BlockManagerId("a", "hostA", 1000),
         ArrayBuffer((ShuffleBlockId(10, 5, 0), size1000, 0)))))
     assert(0 == masterTracker.getNumCachedSerializedBroadcast)
@@ -380,7 +380,7 @@ class MapOutputTrackerSuite extends SparkFunSuite {
         MapStatus(BlockManagerId("b", "hostB", 1000), Array(size10000, size0, size1000, size0), 6),
         None))
     assert(tracker.containsShuffle(10))
-    assert(tracker.getMapSizesByExecutorId(10, 0, 4).toSeq ===
+    assert(tracker.getMapSizesByExecutorId(10, 0, 4).blocks.toSeq ===
         Seq(
           (BlockManagerId("a", "hostA", 1000),
               Seq((ShuffleBlockId(10, 5, 1), size1000, 0),

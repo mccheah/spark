@@ -17,17 +17,26 @@
 
 package org.apache.spark.shuffle.sort.io;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import org.apache.spark.ShuffleDependency;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkEnv;
+import org.apache.spark.TaskContext;
+import org.apache.spark.serializer.SerializerManager;
+import org.apache.spark.shuffle.ShuffleBlockFetcherIterable;
 import org.apache.spark.shuffle.api.ShuffleExecutorComponents;
 import org.apache.spark.shuffle.api.ShuffleMapOutputWriter;
 import org.apache.spark.shuffle.IndexShuffleBlockResolver;
 import org.apache.spark.shuffle.api.SingleSpillShuffleMapOutputWriter;
+import org.apache.spark.shuffle.api.io.ShuffleBlockInputStream;
+import org.apache.spark.shuffle.api.metadata.ShuffleBlockInfo;
+import org.apache.spark.shuffle.api.metadata.ShuffleMetadata;
+import org.apache.spark.shuffle.sort.SortShuffleManager$;
 import org.apache.spark.storage.BlockManager;
 
 public class LocalDiskShuffleExecutorComponents implements ShuffleExecutorComponents {
@@ -35,6 +44,7 @@ public class LocalDiskShuffleExecutorComponents implements ShuffleExecutorCompon
   private final SparkConf sparkConf;
   private BlockManager blockManager;
   private IndexShuffleBlockResolver blockResolver;
+  private SerializerManager serializerManager;
 
   public LocalDiskShuffleExecutorComponents(SparkConf sparkConf) {
     this.sparkConf = sparkConf;
@@ -44,9 +54,11 @@ public class LocalDiskShuffleExecutorComponents implements ShuffleExecutorCompon
   public LocalDiskShuffleExecutorComponents(
       SparkConf sparkConf,
       BlockManager blockManager,
+      SerializerManager serializerManager,
       IndexShuffleBlockResolver blockResolver) {
     this.sparkConf = sparkConf;
     this.blockManager = blockManager;
+    this.serializerManager = serializerManager;
     this.blockResolver = blockResolver;
   }
 
@@ -57,6 +69,10 @@ public class LocalDiskShuffleExecutorComponents implements ShuffleExecutorCompon
       throw new IllegalStateException("No blockManager available from the SparkEnv.");
     }
     blockResolver = new IndexShuffleBlockResolver(sparkConf, blockManager);
+    serializerManager = SparkEnv.get().serializerManager();
+    if (serializerManager == null) {
+      throw new IllegalStateException("No serializer manager available from the SparkEnv.");
+    }
   }
 
   @Override
@@ -81,5 +97,60 @@ public class LocalDiskShuffleExecutorComponents implements ShuffleExecutorCompon
           "Executor components must be initialized before getting writers.");
     }
     return Optional.of(new LocalDiskSingleSpillMapOutputWriter(shuffleId, mapId, blockResolver));
+  }
+
+  @Override
+  public <K, V, C> Iterable<ShuffleBlockInputStream> getPartitionReaders(
+      Iterable<ShuffleBlockInfo> blockInfos,
+      ShuffleDependency<K, V, C> dependency,
+      Optional<ShuffleMetadata> shuffleMetadata) throws IOException {
+    if (blockResolver == null) {
+      throw new IllegalStateException(
+          "Executor components must be initialized before getting readers.");
+    }
+    TaskContext context = TaskContext.get();
+    return new ShuffleBlockFetcherIterable(
+        blockInfos,
+        context,
+        blockManager,
+        serializerManager,
+        sparkConf,
+        false,
+        dependency);
+  }
+
+  @Override
+  public <K, V, C> Iterable<ShuffleBlockInputStream> getPartitionReadersForRange(
+      Iterable<ShuffleBlockInfo> blockInfos,
+      int startPartition,
+      int endPartition,
+      ShuffleDependency<K, V, C> dependency,
+      Optional<ShuffleMetadata> shuffleMetadata) throws IOException {
+    if (blockResolver == null) {
+      throw new IllegalStateException(
+          "Executor components must be initialized before getting readers.");
+    }
+    TaskContext context = TaskContext.get();
+    boolean batchFetchSet =
+        Optional.ofNullable(context).map(ctx -> ctx.getLocalProperty(
+            SortShuffleManager$.MODULE$.FETCH_SHUFFLE_BLOCKS_IN_BATCH_ENABLED_KEY())
+            .equalsIgnoreCase("true")).orElse(false);
+    boolean fetchMultiPartitions = false;
+    if (batchFetchSet) {
+      fetchMultiPartitions = endPartition - startPartition > 1;
+    }
+    return new ShuffleBlockFetcherIterable(
+        blockInfos,
+        context,
+        blockManager,
+        serializerManager,
+        sparkConf,
+        fetchMultiPartitions,
+        dependency);
+  }
+
+  private static final class StartEndPartitions {
+    private int startPartition = Integer.MAX_VALUE;
+    private int endPartition = 0;
   }
 }

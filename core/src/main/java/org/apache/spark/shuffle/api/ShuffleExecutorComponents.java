@@ -21,7 +21,11 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Optional;
 
+import org.apache.spark.ShuffleDependency;
 import org.apache.spark.annotation.Private;
+import org.apache.spark.shuffle.api.io.ShuffleBlockInputStream;
+import org.apache.spark.shuffle.api.metadata.ShuffleBlockInfo;
+import org.apache.spark.shuffle.api.metadata.ShuffleMetadata;
 
 /**
  * :: Private ::
@@ -72,5 +76,31 @@ public interface ShuffleExecutorComponents {
       int shuffleId,
       long mapId) throws IOException {
     return Optional.empty();
+  }
+
+  /**
+   * Returns an underlying {@link Iterable<java.io.InputStream>} that will iterate
+   * through shuffle data, given an iterable for the shuffle blocks to fetch.
+   */
+  <K, V, C> Iterable<ShuffleBlockInputStream> getPartitionReaders(
+      Iterable<ShuffleBlockInfo> blockInfos,
+      ShuffleDependency<K, V, C> dependency,
+      Optional<ShuffleMetadata> shuffleMetadata)
+      throws IOException;
+
+  /**
+   * Optional optimization for partition reading called in jobs that are run using Spark SQL's
+   * adaptive query execution.
+   * <p>
+   * Default delegates to {@link #getPartitionReaders}.
+   */
+  default <K, V, C> Iterable<ShuffleBlockInputStream> getPartitionReadersForRange(
+      Iterable<ShuffleBlockInfo> blockInfos,
+      int startPartition,
+      int endPartition,
+      ShuffleDependency<K, V, C> dependency,
+      Optional<ShuffleMetadata> shuffleMetadata)
+      throws IOException {
+    return getPartitionReaders(blockInfos, dependency, shuffleMetadata);
   }
 }

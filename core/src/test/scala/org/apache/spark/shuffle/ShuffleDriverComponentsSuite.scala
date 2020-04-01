@@ -17,16 +17,18 @@
 
 package org.apache.spark.shuffle
 
-import java.util.{Map => JMap}
+import java.util.{Map => JMap, Optional => JOptional}
 import java.util.concurrent.atomic.AtomicBoolean
 
 import com.google.common.collect.ImmutableMap
 import org.scalatest.Assertions._
 import org.scalatest.BeforeAndAfterEach
 
-import org.apache.spark.{LocalSparkContext, SparkConf, SparkContext, SparkFunSuite}
+import org.apache.spark.{LocalSparkContext, ShuffleDependency, SparkConf, SparkContext, SparkFunSuite}
 import org.apache.spark.internal.config.SHUFFLE_IO_PLUGIN_CLASS
 import org.apache.spark.shuffle.api.{ShuffleDataIO, ShuffleDriverComponents, ShuffleExecutorComponents, ShuffleMapOutputWriter}
+import org.apache.spark.shuffle.api.io.ShuffleBlockInputStream
+import org.apache.spark.shuffle.api.metadata.{ShuffleBlockInfo, ShuffleMetadata}
 import org.apache.spark.shuffle.sort.io.LocalDiskShuffleDataIO
 
 class ShuffleDriverComponentsSuite
@@ -91,5 +93,22 @@ class TestShuffleExecutorComponentsInitialized(delegate: ShuffleExecutorComponen
       mapTaskId: Long,
       numPartitions: Int): ShuffleMapOutputWriter = {
     delegate.createMapOutputWriter(shuffleId, mapTaskId, numPartitions)
+  }
+
+  override def getPartitionReaders[K, V, C](
+    blockInfos: java.lang.Iterable[ShuffleBlockInfo],
+    dependency: ShuffleDependency[K, V, C],
+    shuffleMetadata: JOptional[ShuffleMetadata]): java.lang.Iterable[ShuffleBlockInputStream] = {
+    delegate.getPartitionReaders(blockInfos, dependency, shuffleMetadata)
+  }
+
+  override def getPartitionReadersForRange[K, V, C](
+      blockInfos: java.lang.Iterable[ShuffleBlockInfo],
+      startPartition: Int,
+      endPartition: Int,
+      dependency: ShuffleDependency[K, V, C],
+      shuffleMetadata: JOptional[ShuffleMetadata]): java.lang.Iterable[ShuffleBlockInputStream] = {
+    delegate.getPartitionReadersForRange(
+      blockInfos, startPartition, endPartition, dependency, shuffleMetadata)
   }
 }
