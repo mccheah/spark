@@ -146,8 +146,8 @@ class MapOutputTrackerSuite extends SparkFunSuite {
 
     assert(0 == tracker.getNumCachedSerializedBroadcast)
     // As if we had two simultaneous fetch failures
-    tracker.unregisterMapOutput(10, 0, BlockManagerId("a", "hostA", 1000))
-    tracker.unregisterMapOutput(10, 0, BlockManagerId("a", "hostA", 1000))
+    tracker.removeMapOutput(10, 0, BlockManagerId("a", "hostA", 1000))
+    tracker.removeMapOutput(10, 0, BlockManagerId("a", "hostA", 1000))
 
     // The remaining reduce task might try to grab the output despite the shuffle failure;
     // this should cause it to fail, and the scheduler will ignore the failure due to the
@@ -190,7 +190,7 @@ class MapOutputTrackerSuite extends SparkFunSuite {
     assert(0 == masterTracker.getNumCachedSerializedBroadcast)
 
     val masterTrackerEpochBeforeLossOfMapOutput = masterTracker.getEpoch
-    masterTracker.unregisterMapOutput(10, 0, BlockManagerId("a", "hostA", 1000))
+    masterTracker.removeMapOutput(10, 0, BlockManagerId("a", "hostA", 1000))
     assert(masterTracker.getEpoch > masterTrackerEpochBeforeLossOfMapOutput)
     slaveTracker.updateEpoch(masterTracker.getEpoch)
     intercept[FetchFailedException] { slaveTracker.getMapSizesByExecutorId(10, 0) }
@@ -208,7 +208,7 @@ class MapOutputTrackerSuite extends SparkFunSuite {
   test("remote fetch below max RPC message size") {
     val newConf = new SparkConf
     newConf.set(RPC_MESSAGE_MAX_SIZE, 1)
-    newConf.set(RPC_ASK_TIMEOUT, "1") // Fail fast
+    newConf.set(RPC_ASK_TIMEOUT, "60") // Fail fast
     newConf.set(SHUFFLE_MAPOUTPUT_MIN_SIZE_FOR_BROADCAST, 1048576L)
 
     val masterTracker = newTrackerMaster(newConf)
@@ -329,7 +329,7 @@ class MapOutputTrackerSuite extends SparkFunSuite {
       // message size is small
       verify(rpcCallContext, timeout(30000)).reply(any())
       assert(1 == masterTracker.getNumCachedSerializedBroadcast)
-      masterTracker.unregisterShuffle(20, true)
+      masterTracker.unregisterShuffle(20, false)
       assert(0 == masterTracker.getNumCachedSerializedBroadcast)
     }
   }

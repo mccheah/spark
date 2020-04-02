@@ -64,4 +64,44 @@ public interface ShuffleOutputTracker {
    * shuffle id.
    */
   Optional<ShuffleMetadata> getShuffleMetadata(int shuffleId);
+
+  /**
+   * Called when a shuffle reader implementation throws a fetch failure exception for the given
+   * shuffle block.
+   * <p>
+   * Implementations can choose to update internal state accordingly.
+   */
+  default void handleFetchFailure(
+      int shuffleId,
+      int mapId,
+      int reduceId,
+      long mapTaskAttemptId,
+      Optional<ShuffleBlockMetadata> blockMetadata) {}
+
+  /**
+   * Called when an executor is lost.
+   * <p>
+   * Shuffle plugin implementations that store any state on the lost executor should update
+   * internal state accordingly.
+   */
+  default void handleExecutorLost(String executorId) {}
+
+  /**
+   * Called when a host running one or more executors is lost.
+   * <p>
+   * Shuffle plugin implementations that store any state on the lost host should update
+   * internal state accordingly.
+   */
+  default void handleHostLost(String host) {}
+
+  /**
+   * Inspect whether or not all partitions from the given map output are available in an external
+   * system, i.e. offloaded from an executor.
+   * <p>
+   * If the executor that ran the map task is lost, all map outputs that were written by that
+   * executor are checked against this method. For each map output that is not stored externally,
+   * that map output has to be recomputed.
+   */
+  boolean isMapOutputAvailableExternally(
+      int shuffleId, int mapId, long mapTaskAttemptId);
 }

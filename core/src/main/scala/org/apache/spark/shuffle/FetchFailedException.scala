@@ -18,6 +18,7 @@
 package org.apache.spark.shuffle
 
 import org.apache.spark.{FetchFailed, TaskContext, TaskFailedReason}
+import org.apache.spark.shuffle.api.metadata.ShuffleBlockMetadata
 import org.apache.spark.storage.BlockManagerId
 import org.apache.spark.util.Utils
 
@@ -39,7 +40,8 @@ private[spark] class FetchFailedException(
     mapIndex: Int,
     reduceId: Int,
     message: String,
-    cause: Throwable = null)
+    cause: Throwable = null,
+    blockMetadata: Option[ShuffleBlockMetadata] = None)
   extends Exception(message, cause) {
 
   def this(
@@ -50,6 +52,18 @@ private[spark] class FetchFailedException(
       reduceId: Int,
       cause: Throwable) {
     this(bmAddress, shuffleId, mapTaskId, mapIndex, reduceId, cause.getMessage, cause)
+  }
+
+  def this(
+      bmAddress: BlockManagerId,
+      shuffleId: Int,
+      mapTaskId: Long,
+      mapIndex: Int,
+      reduceId: Int,
+      cause: Throwable,
+      blockMetadata: Option[ShuffleBlockMetadata]) {
+    this(
+      bmAddress, shuffleId, mapTaskId, mapIndex, reduceId, cause.getMessage, cause, blockMetadata)
   }
 
   // SPARK-19276. We set the fetch failure in the task context, so that even if there is user-code

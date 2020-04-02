@@ -2946,7 +2946,7 @@ class DAGSchedulerSuite extends SparkFunSuite with LocalSparkContext with TimeLi
       taskSets(2).tasks(0),
       FetchFailed(makeBlockManagerId("hostB"), shuffleId2, 0L, 0, 0, "ignored"),
       null))
-    mapOutputTracker.removeOutputsOnHost("hostB")
+    mapOutputTracker.removeOutputsByHost("hostB")
 
     assert(scheduler.failedStages.toSeq.map(_.id) == Seq(1, 2))
     scheduler.resubmitFailedStages()

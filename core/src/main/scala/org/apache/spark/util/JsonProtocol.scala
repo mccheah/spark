@@ -36,6 +36,7 @@ import org.apache.spark.rdd.RDDOperationScope
 import org.apache.spark.resource.{ResourceInformation, ResourceProfile}
 import org.apache.spark.scheduler._
 import org.apache.spark.scheduler.cluster.ExecutorInfo
+import org.apache.spark.shuffle.api.metadata.ShuffleBlockMetadata
 import org.apache.spark.storage._
 
 /**
@@ -419,12 +420,17 @@ private[spark] object JsonProtocol {
       case fetchFailed: FetchFailed =>
         val blockManagerAddress = Option(fetchFailed.bmAddress).
           map(blockManagerIdToJson).getOrElse(JNothing)
+        val shuffleBlockMetadata = fetchFailed
+          .blockMetadata
+          .map(shuffleBlockMetadataToJson)
+          .getOrElse(JNothing)
         ("Block Manager Address" -> blockManagerAddress) ~
         ("Shuffle ID" -> fetchFailed.shuffleId) ~
         ("Map ID" -> fetchFailed.mapId) ~
         ("Map Index" -> fetchFailed.mapIndex) ~
         ("Reduce ID" -> fetchFailed.reduceId) ~
-        ("Message" -> fetchFailed.message)
+        ("Message" -> fetchFailed.message) ~
+        ("Block Metadata" -> shuffleBlockMetadata)
       case exceptionFailure: ExceptionFailure =>
         val stackTrace = stackTraceToJson(exceptionFailure.stackTrace)
         val accumUpdates = accumulablesToJson(exceptionFailure.accumUpdates)
@@ -454,6 +460,10 @@ private[spark] object JsonProtocol {
     ("Executor ID" -> blockManagerId.executorId) ~
     ("Host" -> blockManagerId.host) ~
     ("Port" -> blockManagerId.port)
+  }
+
+  def shuffleBlockMetadataToJson(shuffleBlockMetadata: ShuffleBlockMetadata): JValue = {
+    ("Metadata" -> shuffleBlockMetadata.toPrintableString)
   }
 
   def jobResultToJson(jobResult: JobResult): JValue = {

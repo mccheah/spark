@@ -39,7 +39,7 @@ import org.apache.spark.io.CompressionCodec
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpoint, RpcEndpointRef, RpcEnv}
 import org.apache.spark.scheduler.{ExecutorCacheTaskLocation, MapStatus, MapTaskResult}
 import org.apache.spark.shuffle.MetadataFetchFailedException
-import org.apache.spark.shuffle.api.metadata.{MapOutputMetadata, ShuffleMetadata, ShuffleOutputTracker}
+import org.apache.spark.shuffle.api.metadata.{MapOutputMetadata, ShuffleBlockMetadata, ShuffleMetadata, ShuffleOutputTracker}
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockId}
 import org.apache.spark.util._
 
@@ -155,29 +155,40 @@ private class ShuffleStatus(
   }
 
   /**
-   * Removes all shuffle outputs associated with this host. Note that this will also remove
-   * outputs which are served by an external shuffle server (if one exists).
-   */
-  def removeOutputsOnHost(host: String): Unit = withWriteLock {
-    removeOutputsByFilter(x => x.host == host)
-  }
-
-  /**
    * Removes all map outputs associated with the specified executor. Note that this will also
    * remove outputs which are served by an external shuffle server (if one exists), as they are
    * still registered with that execId.
    */
-  def removeOutputsOnExecutor(execId: String): Unit = withWriteLock {
-    removeOutputsByFilter(x => x.executorId == execId)
+  def removeOutputsByExecutor(execId: String): Unit = withWriteLock {
+    removeOutputsByFilter {
+      case (status, index) =>
+        status.location.executorId == execId &&
+          !shuffleOutputTracker.exists(_.isMapOutputAvailableExternally(
+            shuffleId, index, status.mapId))
+    }
+  }
+
+  /**
+   * Removes all shuffle outputs associated with this host. Note that this will also remove
+   * outputs which are served by an external shuffle server (if one exists).
+   */
+  def removeOutputsByHost(host: String): Unit = withWriteLock {
+    removeOutputsByFilter {
+      case (status, index) =>
+        status.location.host == host &&
+        !shuffleOutputTracker.exists(_.isMapOutputAvailableExternally(
+            shuffleId, index, status.mapId))
+    }
   }
 
   /**
    * Removes all shuffle outputs which satisfies the filter. Note that this will also
    * remove outputs which are served by an external shuffle server (if one exists).
    */
-  def removeOutputsByFilter(f: BlockManagerId => Boolean): Unit = withWriteLock {
+  def removeOutputsByFilter(f: (MapStatus, Int) => Boolean): Unit = withWriteLock {
     for (mapIndex <- mapStatuses.indices) {
-      if (mapStatuses(mapIndex) != null && f(mapStatuses(mapIndex).location)) {
+      val status = mapStatuses(mapIndex)
+      if (status != null && f(status, mapIndex)) {
         _numAvailableOutputs -= 1
         mapStatuses(mapIndex) = null
         invalidateSerializedMapOutputStatusCache()
@@ -524,7 +535,7 @@ private[spark] class MapOutputTrackerMaster(
   }
 
   /** Unregister map output information of the given shuffle, mapper and block manager */
-  def unregisterMapOutput(shuffleId: Int, mapIndex: Int, bmAddress: BlockManagerId): Unit = {
+  def removeMapOutput(shuffleId: Int, mapIndex: Int, bmAddress: BlockManagerId): Unit = {
     shuffleStatuses.get(shuffleId) match {
       case Some(shuffleStatus) =>
         shuffleStatus.removeMapOutput(mapIndex, bmAddress)
@@ -538,7 +549,7 @@ private[spark] class MapOutputTrackerMaster(
   def unregisterAllMapOutput(shuffleId: Int): Unit = {
     shuffleStatuses.get(shuffleId) match {
       case Some(shuffleStatus) =>
-        shuffleStatus.removeOutputsByFilter(x => true)
+        shuffleStatus.removeOutputsByFilter((_, _) => true)
         incrementEpoch()
       case None =>
         throw new SparkException(
@@ -554,12 +565,32 @@ private[spark] class MapOutputTrackerMaster(
     _shuffleOutputTracker.foreach(_.unregisterShuffle(shuffleId, blocking))
   }
 
+  def removeOutputsByExecutor(execId: String): Unit = {
+    _shuffleOutputTracker.foreach(_.handleExecutorLost(execId))
+    shuffleStatuses.valuesIterator.foreach { _.removeOutputsByExecutor(execId) }
+    incrementEpoch()
+  }
+
+  def removeOutputsByHost(host: String): Unit = {
+    _shuffleOutputTracker.foreach(_.handleHostLost(host))
+    shuffleStatuses.valuesIterator.foreach { _.removeOutputsByHost(host) }
+    incrementEpoch()
+  }
+
   /**
    * Removes all shuffle outputs associated with this host. Note that this will also remove
    * outputs which are served by an external shuffle server (if one exists).
    */
-  def removeOutputsOnHost(host: String): Unit = {
-    shuffleStatuses.valuesIterator.foreach { _.removeOutputsOnHost(host) }
+  def handleFetchFailureByHost(
+      shuffleId: Int,
+      mapIndex: Int,
+      reduceId: Int,
+      mapId: Long,
+      blockMetadata: Option[ShuffleBlockMetadata],
+      host: String): Unit = {
+    _shuffleOutputTracker.foreach(_.handleFetchFailure(
+      shuffleId, mapIndex, reduceId, mapId, blockMetadata.asJava))
+    shuffleStatuses.valuesIterator.foreach { _.removeOutputsByHost(host) }
     incrementEpoch()
   }
 
@@ -568,8 +599,16 @@ private[spark] class MapOutputTrackerMaster(
    * outputs which are served by an external shuffle server (if one exists), as they are still
    * registered with this execId.
    */
-  def removeOutputsOnExecutor(execId: String): Unit = {
-    shuffleStatuses.valuesIterator.foreach { _.removeOutputsOnExecutor(execId) }
+  def handleFetchFailureByExecutor(
+      shuffleId: Int,
+      mapIndex: Int,
+      reduceId: Int,
+      mapId: Long,
+      blockMetadata: Option[ShuffleBlockMetadata],
+      execId: String): Unit = {
+    _shuffleOutputTracker.foreach(_.handleFetchFailure(
+      shuffleId, mapIndex, reduceId, mapId, blockMetadata.asJava))
+    shuffleStatuses.valuesIterator.foreach { _.removeOutputsByExecutor(execId) }
     incrementEpoch()
   }
 

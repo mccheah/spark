@@ -31,4 +31,9 @@ public class LocalDiskShuffleBlockMetadata implements ShuffleBlockMetadata {
   public BlockId getBlockId() {
     return blockId;
   }
+
+  @Override
+  public String toPrintableString() {
+    return blockId.toString();
+  }
 }

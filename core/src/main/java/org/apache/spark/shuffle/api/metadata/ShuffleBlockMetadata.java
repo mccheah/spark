@@ -17,8 +17,17 @@
 
 package org.apache.spark.shuffle.api.metadata;
 
+import java.io.Serializable;
+
 /**
  * Metadata tags returned from partition readers for each input stream to be read by
  * the reduce task.
  */
-public interface ShuffleBlockMetadata {}
+public interface ShuffleBlockMetadata extends Serializable {
+
+  /**
+   * Used for display in fetch failed exceptions.
+   */
+  String toPrintableString();
+
+}

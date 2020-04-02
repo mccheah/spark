@@ -34,6 +34,7 @@ import org.apache.spark.network.buffer.{FileSegmentManagedBuffer, ManagedBuffer}
 import org.apache.spark.network.shuffle._
 import org.apache.spark.network.util.TransportConf
 import org.apache.spark.shuffle.{FetchFailedException, ShuffleReadMetricsReporter}
+import org.apache.spark.shuffle.sort.io.LocalDiskShuffleBlockMetadata
 import org.apache.spark.util.{CompletionIterator, TaskCompletionListener, Utils}
 
 /**
@@ -795,11 +796,27 @@ final class ShuffleBlockFetcherIterator(
       mapIndex: Int,
       address: BlockManagerId,
       e: Throwable) = {
+    val metadata = new LocalDiskShuffleBlockMetadata(blockId)
     blockId match {
       case ShuffleBlockId(shufId, mapId, reduceId) =>
-        throw new FetchFailedException(address, shufId, mapId, mapIndex, reduceId, e)
+        throw new FetchFailedException(
+          address,
+          shufId,
+          mapId,
+          mapIndex,
+          reduceId,
+          e,
+          Some(metadata))
+
       case ShuffleBlockBatchId(shuffleId, mapId, startReduceId, _) =>
-        throw new FetchFailedException(address, shuffleId, mapId, mapIndex, startReduceId, e)
+        throw new FetchFailedException(
+          address,
+          shuffleId,
+          mapId,
+          mapIndex,
+          startReduceId,
+          e,
+          Some(metadata))
       case _ =>
         throw new SparkException(
           "Failed to get block " + blockId + ", which is not a shuffle block", e)
