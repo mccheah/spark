@@ -521,10 +521,12 @@ class SparkContext(config: SparkConf) extends Logging {
     _shuffleDriverComponents.initializeApplication().asScala.foreach { case (k, v) =>
       _conf.set(ShuffleDataIOUtils.SHUFFLE_SPARK_CONF_PREFIX + k, v)
     }
+    val shuffleOutputTracker = _shuffleDriverComponents.shuffleOutputTracker().asScala
     // Should really be done in SparkEnv creation, but initialization ordering is quite
     // difficult...
     env.mapOutputTracker.asInstanceOf[MapOutputTrackerMaster].setShuffleOutputTracker(
-      _shuffleDriverComponents.shuffleOutputTracker().asScala)
+      shuffleOutputTracker)
+    _conf.set(SHUFFLE_IO_PLUGIN_OUTPUT_TRACKING_ENABLED, shuffleOutputTracker.isDefined)
 
     // We need to register "HeartbeatReceiver" before "createTaskScheduler" because Executor will
     // retrieve "HeartbeatReceiver" in the constructor. (SPARK-6640)

@@ -36,6 +36,7 @@ import org.apache.spark.shuffle.api.SingleSpillShuffleMapOutputWriter;
 import org.apache.spark.shuffle.api.io.ShuffleBlockInputStream;
 import org.apache.spark.shuffle.api.metadata.ShuffleBlockInfo;
 import org.apache.spark.shuffle.api.metadata.ShuffleMetadata;
+import org.apache.spark.shuffle.api.metadata.ShuffleUpdater;
 import org.apache.spark.shuffle.sort.SortShuffleManager$;
 import org.apache.spark.storage.BlockManager;
 
@@ -63,7 +64,11 @@ public class LocalDiskShuffleExecutorComponents implements ShuffleExecutorCompon
   }
 
   @Override
-  public void initializeExecutor(String appId, String execId, Map<String, String> extraConfigs) {
+  public void initializeExecutor(
+      String appId,
+      String execId,
+      Map<String, String> extraConfigs,
+      Optional<ShuffleUpdater> updater) {
     blockManager = SparkEnv.get().blockManager();
     if (blockManager == null) {
       throw new IllegalStateException("No blockManager available from the SparkEnv.");

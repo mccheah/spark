@@ -20,11 +20,13 @@ package org.apache.spark.shuffle.sort
 import java.util.concurrent.ConcurrentHashMap
 
 import scala.collection.JavaConverters._
+import scala.compat.java8.OptionConverters._
 
 import org.apache.spark._
 import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.api.{ShuffleDataIO, ShuffleExecutorComponents}
+import org.apache.spark.shuffle.api.metadata.ShuffleUpdater
 import org.apache.spark.util.Utils
 import org.apache.spark.util.collection.OpenHashSet
 
@@ -254,10 +256,18 @@ private[spark] object SortShuffleManager extends Logging {
     val executorComponents = ShuffleDataIOUtils.loadShuffleDataIO(conf).executor()
     val extraConfigs = conf.getAllWithPrefix(ShuffleDataIOUtils.SHUFFLE_SPARK_CONF_PREFIX)
         .toMap
+    val pluginOutputTrackingEnabled = conf.get(config.SHUFFLE_IO_PLUGIN_OUTPUT_TRACKING_ENABLED)
+    val trackerWorker = SparkEnv.get.mapOutputTracker.asInstanceOf[MapOutputTrackerWorker]
+    val updater = if (pluginOutputTrackingEnabled) {
+      Some(trackerWorker)
+    } else {
+      Option.empty[ShuffleUpdater]
+    }
     executorComponents.initializeExecutor(
       conf.getAppId,
       SparkEnv.get.executorId,
-      extraConfigs.asJava)
+      extraConfigs.asJava,
+      updater.asJava)
     executorComponents
   }
 }

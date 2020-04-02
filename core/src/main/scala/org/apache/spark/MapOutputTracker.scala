@@ -39,7 +39,7 @@ import org.apache.spark.io.CompressionCodec
 import org.apache.spark.rpc.{RpcCallContext, RpcEndpoint, RpcEndpointRef, RpcEnv}
 import org.apache.spark.scheduler.{ExecutorCacheTaskLocation, MapStatus, MapTaskResult}
 import org.apache.spark.shuffle.MetadataFetchFailedException
-import org.apache.spark.shuffle.api.metadata.{MapOutputMetadata, ShuffleBlockMetadata, ShuffleMetadata, ShuffleOutputTracker}
+import org.apache.spark.shuffle.api.metadata.{MapOutputMetadata, ShuffleBlockMetadata, ShuffleMetadata, ShuffleOutputTracker, ShuffleOutputUpdate, ShuffleUpdater}
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockId}
 import org.apache.spark.util._
 
@@ -294,6 +294,8 @@ private[spark] sealed trait MapOutputTrackerMessage
 private[spark] case class GetMapOutputStatuses(shuffleId: Int)
   extends MapOutputTrackerMessage
 private[spark] case object StopMapOutputTracker extends MapOutputTrackerMessage
+private[spark] case class UpdateShuffleOutput(update: ShuffleOutputUpdate)
+  extends MapOutputTrackerMessage
 
 private[spark] case class GetMapOutputMessage(shuffleId: Int, context: RpcCallContext)
 
@@ -314,6 +316,9 @@ private[spark] class MapOutputTrackerMasterEndpoint(
       logInfo("MapOutputTrackerMasterEndpoint stopped!")
       context.reply(true)
       stop()
+    case UpdateShuffleOutput(update) =>
+      tracker.updateShuffleOutput(update)
+      context.reply(true)
   }
 }
 
@@ -402,6 +407,11 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
    * Deletes map output status information for the specified shuffle stage.
    */
   def unregisterShuffle(shuffleId: Int, blocking: Boolean): Unit
+
+  /**
+   * Handle a shuffle output update sent by an implementation of the shuffle storage plugin system.
+   */
+  def updateShuffleOutput(update: ShuffleOutputUpdate)
 
   def stop(): Unit = {}
 }
@@ -862,6 +872,14 @@ private[spark] class MapOutputTrackerMaster(
     }
   }
 
+  override def updateShuffleOutput(update: ShuffleOutputUpdate): Unit = {
+    if (_shuffleOutputTracker.isEmpty) {
+      throw new SparkException("Shuffle output update received, but no shuffle output" +
+        " tracker is available.")
+    }
+    _shuffleOutputTracker.foreach(_.updateShuffleOutput(update))
+  }
+
   override def stop(): Unit = {
     mapOutputRequests.offer(PoisonPill)
     threadpool.shutdown()
@@ -877,7 +895,8 @@ private[spark] class MapOutputTrackerMaster(
  * MapOutputTrackerMaster directly (which is possible because the master and worker share a common
  * superclass).
  */
-private[spark] class MapOutputTrackerWorker(conf: SparkConf) extends MapOutputTracker(conf) {
+private[spark] class MapOutputTrackerWorker(conf: SparkConf)
+  extends MapOutputTracker(conf) with ShuffleUpdater {
 
   val shuffleInfos: Map[Int, ShuffleInfo] =
     new ConcurrentHashMap[Int, ShuffleInfo]().asScala
@@ -984,6 +1003,13 @@ private[spark] class MapOutputTrackerWorker(conf: SparkConf) extends MapOutputTr
         shuffleInfos.clear()
       }
     }
+  }
+
+  /**
+   * Handle a shuffle output update sent by an implementation of the shuffle storage plugin system.
+   */
+  override def updateShuffleOutput(update: ShuffleOutputUpdate): Unit = {
+    sendTracker(UpdateShuffleOutput(update))
   }
 }
 

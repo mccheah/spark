@@ -26,6 +26,7 @@ import org.apache.spark.annotation.Private;
 import org.apache.spark.shuffle.api.io.ShuffleBlockInputStream;
 import org.apache.spark.shuffle.api.metadata.ShuffleBlockInfo;
 import org.apache.spark.shuffle.api.metadata.ShuffleMetadata;
+import org.apache.spark.shuffle.api.metadata.ShuffleUpdater;
 
 /**
  * :: Private ::
@@ -44,8 +45,15 @@ public interface ShuffleExecutorComponents {
    * @param execId The unique identifier of the executor being initialized
    * @param extraConfigs Extra configs that were returned by
    *                     {@link ShuffleDriverComponents#initializeApplication()}
+   * @param updater A hook to the driver to send dynamic updates to shuffle storage information.
+   *                Only provided if {@link ShuffleDriverComponents#shuffleOutputTracker()} returns
+   *                a non-empty value (e.g. shuffle output tracking is enabled).
    */
-  void initializeExecutor(String appId, String execId, Map<String, String> extraConfigs);
+  void initializeExecutor(
+      String appId,
+      String execId,
+      Map<String, String> extraConfigs,
+      Optional<ShuffleUpdater> updater);
 
   /**
    * Called once per map task to create a writer that will be responsible for persisting all the

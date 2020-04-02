@@ -1096,6 +1096,15 @@ package object config {
       .stringConf
       .createWithDefault(classOf[LocalDiskShuffleDataIO].getName)
 
+  private[spark] val SHUFFLE_IO_PLUGIN_OUTPUT_TRACKING_ENABLED =
+    ConfigBuilder("spark.shuffle.sort.io.plugin.output.tracking.enabled")
+      .doc("Indicates whether or not the shuffle plugin has enabled custom output tracking." +
+        "Determined by the driver and sent to the executors; users should not set this manually.")
+      .version("3.1.0")
+      .internal()
+      .booleanConf
+      .createWithDefault(false)
+
   private[spark] val SHUFFLE_FILE_BUFFER_SIZE =
     ConfigBuilder("spark.shuffle.file.buffer")
       .doc("Size of the in-memory buffer for each shuffle file output stream, in KiB unless " +

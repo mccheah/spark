@@ -102,6 +102,12 @@ public interface ShuffleOutputTracker {
    * executor are checked against this method. For each map output that is not stored externally,
    * that map output has to be recomputed.
    */
-  boolean isMapOutputAvailableExternally(
-      int shuffleId, int mapId, long mapTaskAttemptId);
+  boolean isMapOutputAvailableExternally(int shuffleId, int mapId, long mapTaskAttemptId);
+
+  /**
+   * Send an update to this shuffle output tracker.
+   * <p>
+   * Executors can call
+   */
+  default void updateShuffleOutput(ShuffleOutputUpdate update) {}
 }

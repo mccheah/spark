@@ -28,7 +28,7 @@ import org.apache.spark.{LocalSparkContext, ShuffleDependency, SparkConf, SparkC
 import org.apache.spark.internal.config.SHUFFLE_IO_PLUGIN_CLASS
 import org.apache.spark.shuffle.api.{ShuffleDataIO, ShuffleDriverComponents, ShuffleExecutorComponents, ShuffleMapOutputWriter}
 import org.apache.spark.shuffle.api.io.ShuffleBlockInputStream
-import org.apache.spark.shuffle.api.metadata.{ShuffleBlockInfo, ShuffleMetadata}
+import org.apache.spark.shuffle.api.metadata.{MapOutputMetadata, ShuffleBlockInfo, ShuffleMetadata, ShuffleOutputTracker, ShuffleUpdater}
 import org.apache.spark.shuffle.sort.io.LocalDiskShuffleDataIO
 
 class ShuffleDriverComponentsSuite
@@ -57,18 +57,29 @@ class ShuffleDriverComponentsSuite
 class TestShuffleDataIO(sparkConf: SparkConf) extends ShuffleDataIO {
   private val delegate = new LocalDiskShuffleDataIO(sparkConf)
 
-  override def driver(): ShuffleDriverComponents = new TestShuffleDriverComponents()
+  override def driver(): ShuffleDriverComponents = {
+    new TestShuffleDriverComponents(delegate.driver())
+  }
 
   override def executor(): ShuffleExecutorComponents =
     new TestShuffleExecutorComponentsInitialized(delegate.executor())
 }
 
-class TestShuffleDriverComponents extends ShuffleDriverComponents {
+class TestShuffleDriverComponents(delegate: ShuffleDriverComponents)
+  extends ShuffleDriverComponents {
   override def initializeApplication(): JMap[String, String] = {
-    ImmutableMap.of("test-plugin-key", "plugin-set-value")
+    val confs = delegate.initializeApplication()
+    ImmutableMap.builder[String, String]()
+      .putAll(ImmutableMap.of("test-plugin-key", "plugin-set-value"))
+      .putAll(confs)
+      .build
   }
 
   override def cleanupApplication(): Unit = {}
+
+  override def shuffleOutputTracker(): JOptional[ShuffleOutputTracker] = {
+    delegate.shuffleOutputTracker()
+  }
 }
 
 object TestShuffleExecutorComponentsInitialized {
@@ -81,10 +92,12 @@ class TestShuffleExecutorComponentsInitialized(delegate: ShuffleExecutorComponen
   override def initializeExecutor(
       appId: String,
       execId: String,
-      extraConfigs: JMap[String, String]): Unit = {
-    delegate.initializeExecutor(appId, execId, extraConfigs)
+      extraConfigs: JMap[String, String],
+      updater: JOptional[ShuffleUpdater]): Unit = {
+    delegate.initializeExecutor(appId, execId, extraConfigs, updater)
     assert(extraConfigs.get("test-plugin-key") == "plugin-set-value", extraConfigs)
     assert(extraConfigs.get("test-user-key") == "user-set-value")
+    assert(updater.isPresent)
     TestShuffleExecutorComponentsInitialized.initialized.set(true)
   }
 
