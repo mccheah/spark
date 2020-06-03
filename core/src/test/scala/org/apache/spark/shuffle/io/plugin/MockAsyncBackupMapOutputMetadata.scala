@@ -15,25 +15,11 @@
  * limitations under the License.
  */
 
-package org.apache.spark.shuffle.api;
+package org.apache.spark.shuffle.io.plugin
 
-import java.io.File;
-import java.io.IOException;
-import java.util.Optional;
+import org.apache.spark.shuffle.api.metadata.MapOutputMetadata
 
-import org.apache.spark.annotation.Private;
-import org.apache.spark.shuffle.api.metadata.MapOutputMetadata;
-
-/**
- * Optional extension for partition writing that is optimized for transferring a single
- * file to the backing store.
- */
-@Private
-public interface SingleSpillShuffleMapOutputWriter {
-
-  /**
-   * Transfer a file that contains the bytes of all the partitions written by this map task.
-   */
-  Optional<MapOutputMetadata> transferMapSpillFile(File mapOutputFile, long[] partitionLengths)
-      throws IOException;
-}
+case class MockAsyncBackupMapOutputMetadata(
+    backupIdsByPartition: Map[Int, String],
+    delegateMetadata: Option[MapOutputMetadata])
+  extends MapOutputMetadata
