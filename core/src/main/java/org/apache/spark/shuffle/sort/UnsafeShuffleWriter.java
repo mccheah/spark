@@ -283,8 +283,9 @@ public class UnsafeShuffleWriter<K, V> extends ShuffleWriter<K, V> {
         Optional<MapOutputMetadata> maybeMetadata =
             maybeSingleFileWriter.get().transferMapSpillFile(
                 spills[0].file, spills[0].partitionLengths);
-        mapOutputCommitMessage = new MapOutputCommitMessage(
-            spills[0].partitionLengths, maybeMetadata);
+        mapOutputCommitMessage = maybeMetadata.map(
+            metadata -> MapOutputCommitMessage.of(spills[0].partitionLengths, metadata))
+            .orElse(MapOutputCommitMessage.of(spills[0].partitionLengths));
       } else {
         mapOutputCommitMessage = mergeSpillsUsingStandardWriter(spills);
       }
